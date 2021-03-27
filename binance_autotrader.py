@@ -26,7 +26,7 @@ def main():
 	spend_limit_for_testing = 0.01
 	buy_price_increase = 1.0005 # place initial order slighly above calculated price to help ensure order fills
 	trading_pairs = [("ADAUSD","ADABTC","ADA"),("BCHUSD","BCHBTC","BCH"),("BNBUSD","BNBBTC","BNB"),("ETHUSD","ETHBTC","ETH"),("LINKUSD","LINKBTC","LINK"),("LTCUSD","LTCBTC","LTC"),("UNIUSD","UNIBTC","UNI"),("VETUSD","VETBTC","VET"),("XTZUSD","XTZBTC","XTZ")]
-	
+	alt_precision = {'ADA': 0, 'BCH': 2, 'BNB': 2, 'ETH': 2, 'LINK': 1, 'LTC': 2, 'UNI': 0, 'VET': 0, 'XTZ': 2}
 	i=0
 
 	while 1:
@@ -75,7 +75,7 @@ def main():
 				if (usd_balance == -1):
 					break
 							
-				USD_per_alt_order = place_order(symbol=x[0],side='BUY',type='LIMIT',timeInForce='IOC',quantity="{0:.{1}f}".format(spend_limit_for_testing*float(usd_balance)/float(USD_per_alt["price"]),alt_precision(x[2])),price="{:.4f}".format(buy_price_increase*float(USD_per_alt["price"])))
+				USD_per_alt_order = place_order(symbol=x[0],side='BUY',type='LIMIT',timeInForce='IOC',quantity="{0:.{1}f}".format(spend_limit_for_testing*float(usd_balance)/float(USD_per_alt["price"]),alt_precision[x[2]]),price="{:.4f}".format(buy_price_increase*float(USD_per_alt["price"])))
 				
 				if (USD_per_alt_order == -1):
 					break
@@ -83,16 +83,17 @@ def main():
 					print('Order for {:.2f} {} at {:.4f} USD ea completed with status: {}.\n'.format(float(USD_per_alt_order["executedQty"]),x[2],float(USD_per_alt_order["price"]),USD_per_alt_order["status"]))
 				
 				if(USD_per_alt_order["status"]=='FILLED'):
-					BTC_per_alt_order = place_order(symbol=x[1],side='SELL',type='MARKET',quantity="{0:.{1}f}".format(float(USD_per_alt_order["executedQty"]),alt_precision(x[2])))#,"{:.4f}".format(float(BTC_per_alt["price"])))
+					
+					BTC_per_alt_order = place_order(symbol=x[1],side='SELL',type='MARKET',quantity="{0:.{1}f}".format(float(USD_per_alt_order["executedQty"]),alt_precision[x[2]]))#,"{:.4f}".format(float(BTC_per_alt["price"])))
 									
 					if (BTC_per_alt_order == -1):
 						break
 					else:
 						print(BTC_per_alt_order)
-						print('Order for {:.2f} BTC at {} {} ea completed with status: {}.\n'.format(float(BTC_per_alt_order["executedQty"]),(1/float(BTC_per_alt_order["fills"][0]["price"])),x[2],BTC_per_alt_order["status"]))
+						print('Order for {:.2f} BTC at {} {} ea completed with status: {}.\n'.format(float(BTC_per_alt_order["fills"][0]["price"])*float(BTC_per_alt_order["executedQty"]),(1/float(BTC_per_alt_order["fills"][0]["price"])),x[2],BTC_per_alt_order["status"]))
 
 				
-					USD_per_BTC_order = place_order(symbol='BTCUSD',side='SELL',type='MARKET',quantity="{:.6f}".format(float(BTC_per_alt_order["executedQty"])))#,"{:.4f}".format(float(USD_per_BTC["price"])))
+					USD_per_BTC_order = place_order(symbol='BTCUSD',side='SELL',type='MARKET',quantity="{:.6f}".format(float(BTC_per_alt_order["fills"][0]["price"])*float(BTC_per_alt_order["executedQty"])))#,"{:.4f}".format(float(USD_per_BTC["price"])))
 					
 					if (USD_per_BTC_order == -1):
 						break
@@ -102,6 +103,7 @@ def main():
 					usd_balance = check_balance('USD')
 				
 					time.sleep(10000)
+			
 			elif (float(USD_per_BTC["price"])*(1+fee)*factor_of_safety < float(USD_per_alt["price"])*(1-fee)/(float(BTC_per_alt["price"])*(1-fee))):
 				
 				print("\a {} - EQ2 TRUE\n".format(x[2]))
@@ -112,7 +114,7 @@ def main():
 				if (usd_balance == -1):
 					break
 
-				btc_quantity = round((spend_limit_for_testing*float(usd_balance)/float(USD_per_BTC["price"]))/BTC_per_alt["price"],alt_precision(x[2]))*BTC_per_alt["price"]
+				btc_quantity = round((spend_limit_for_testing*float(usd_balance)/float(USD_per_BTC["price"]))/float(BTC_per_alt["price"]),alt_precision[x[2]])*float(BTC_per_alt["price"])
 				print(btc_quantity)
 
 				USD_per_BTC_order = place_order(symbol='BTCUSD',side='BUY',type='LIMIT',timeInForce='IOC',quantity="{:.6f}".format(btc_quantity),price="{:.2f}".format(buy_price_increase*float(USD_per_BTC["price"])))
@@ -123,20 +125,20 @@ def main():
 				
 				if(USD_per_BTC_order["status"]=='FILLED'):
 
-					BTC_per_alt_order = place_order(symbol=x[1],side='BUY',type='MARKET',quantity="{0:.{1}f}".format(float(USD_per_BTC_order["executedQty"])/float(BTC_per_alt["price"]),alt_precision(x[2])))#,"{:.4f}".format(float(BTC_per_alt["price"])))
+					BTC_per_alt_order = place_order(symbol=x[1],side='BUY',type='MARKET',quantity="{0:.{1}f}".format(float(USD_per_BTC_order["executedQty"])/float(BTC_per_alt["price"]),alt_precision[x[2]]))#,"{:.4f}".format(float(BTC_per_alt["price"])))
 					
 					if (BTC_per_alt_order == -1):
 						break
 					else:
 						print('Order for {} {} at {:.6f} BTC ea completed with status: {}.\n'.format(float(BTC_per_alt_order["executedQty"]),x[2],float(BTC_per_alt_order["fills"][0]["price"]),BTC_per_alt_order["status"]))
 					
-					USD_per_alt_order = place_order(symbol=x[0],side='SELL',type='MARKET',quantity="{0:.{1}f}".format(float(BTC_per_alt_order["executedQty"]),alt_precision(x[2])))#,"{:.4f}".format(float(USD_per_alt["price"])))
+					USD_per_alt_order = place_order(symbol=x[0],side='SELL',type='MARKET',quantity="{0:.{1}f}".format(float(BTC_per_alt_order["executedQty"]),alt_precision[x[2]]))#,"{:.4f}".format(float(USD_per_alt["price"])))
 					
 					if (USD_per_alt_order == -1):
 						break
 					else:
-						print('Order for {:.2f} USD at {:.4f} {} ea completed with status: {}.\n'.format(float(USD_per_BTC_order["executedQty"]),(1/float(USD_per_BTC_order["fills"][0]["price"])),x[2],USD_per_BTC_order["status"]))
-				
+						print('Order for {:.2f} USD at {:.4f} {} ea completed with status: {}.\n'.format(float(USD_per_alt_order["fills"][0]["price"])*float(USD_per_alt_order["executedQty"]),(1/float(USD_per_alt_order["fills"][0]["price"])),x[2],USD_per_BTC_order["status"]))	
+
 					usd_balance = check_balance('USD')	
 					time.sleep(10000)			
 			
@@ -175,17 +177,5 @@ def check_balance(requested_asset):
 		time.sleep(1)
 		return -1
 
-def alt_precision(x):
-	return {
-		'ADA': 0,
-		'BCH': 2,
-		'BNB': 2,
-		'ETH': 2,
-		'LINK': 1,
-		'LTC': 2,
-		'UNI': 0,
-		'VET': 0,
-		'XTZ': 2,
-	}
 
 main()
