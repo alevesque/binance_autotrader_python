@@ -1,6 +1,6 @@
 #from binance.client import Client
 from binance.exceptions import *
-#import time
+import time
 import datetime, requests, asyncio, signal, warnings, config
 #import sys
 #import requests
@@ -14,6 +14,8 @@ from binance import AsyncClient, BinanceSocketManager
 
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', RuntimeWarning)
+
+i = 0
 """
 ==============================================================================================
 Binance Autotrader - EMA Strategy
@@ -41,7 +43,7 @@ TODO:
 [X]		6d. auto dl and parse exchange info to get qty limit for each asset - prob not necc in practice but good for down the line if accumulate a lot
 [ ]		6e. buy/sell position check - use min position of exchangeinfo asset
 [ ]		6f. is websocket buffer getting overwhelmed by multiple messages happenig at once (NEW then immediate FILL)
-
+[ ]		6g. NEEDS TO RECONNECT SOCKETS AFTER 24H
 """
 
 '''
@@ -63,104 +65,100 @@ TODO:
 '''
 async def main(*args):
 	
-	if(loop_active_bool==True):
-		#initialize websocket client to livestream data one ping at a time. preferable to 
-		#downloading redundant or late data as would happen with manual update periods using regular client
-		async_client = await AsyncClient.create(api_key=config.api_key,api_secret=config.api_secret,testnet=config.use_testnet,tld='us')
-		
-		if config.reset_orders==True:
-			open_orders = await async_client.get_open_orders()
-			await close_all_open_orders(async_client,open_orders)
-			print('All open orders closed.')
-	else:
-		exit(0)
-	
-	bm = BinanceSocketManager(async_client,user_timeout=30)
-	
-
-	exchangeinfo_raw = await async_client.get_exchange_info()
-	exchangeinfo = []
-	#download initial data for the longer EMA timeframes, so calculations can start immediately
-	#rather than spooling up hundreds of ticks of price data for EMA600, 400 etc
-	for x in config.trading_pairs:
-		init_data_raw = await async_client.get_klines(symbol=x['pair'],interval='5m',limit=601)
-		data = pd.DataFrame(np.array(init_data_raw)[:,0:6],
-				   columns=['open_time', 'open', 'high', 'low', 'close', 'volume'],
-				   dtype='float64')
-		print(f"Initial data loaded - {x['pair']}")
-	
-		for pairs in exchangeinfo_raw['symbols']: 
-			if pairs['symbol'] == x['pair']:
-				exchangeinfo.append(pairs)
-		
-	#print(exchangeinfo)
-
-	# start any sockets here, i.e. a trade socket
-	xlmusd_kline_5m = bm.kline_socket(symbol=config.trading_pairs[0]['pair'],interval='5m')
-	trade_manager = bm.user_socket()
-	print('Sockets initialized.')
-
-	# then start receiving messages
-	async with xlmusd_kline_5m as xlmusd_kline_5m_message:
-		while loop_active_bool==True:
-
-			#-----
-			#take in new kline data from websocket stream
-			new_data_raw = await xlmusd_kline_5m_message.recv()
+	while loop_active_bool == True:
+		starttime = time.time()
+		if(loop_active_bool==True):
+			#initialize websocket client to livestream data one ping at a time. preferable to 
+			#downloading redundant or late data as would happen with manual update periods using regular client
+			async_client = await AsyncClient.create(api_key=config.api_key,api_secret=config.api_secret,testnet=config.use_testnet,tld='us')
 			
-			#process raw data into simpler form
-			data = process_raw_klines(new_data_raw,data)
-			#------
-			#print(data['close'].values[-1])
-			#print(data['close'].values[0])
-			#print('--')
-			#------
-			#get account info for balance checking
-			acc_res = await async_client.get_account(recvWindow=10000)
+			if config.reset_orders==True:
+				open_orders = await async_client.get_open_orders()
+				await close_all_open_orders(async_client,open_orders)
+				print('All open orders closed.')
+		else:
+			exit(0)
+		
+		bm = BinanceSocketManager(async_client,user_timeout=5)
+		
 
-			#update wallet balances
-			balance = wallet_update(acc_res)
-			print(balance)
-			#------
-
-			#send data to functions that calc indicators, calc strat, buy/sell if necessary, and log to console
-			[indicators, order, config.carryover_vars] = trading_strategy(data,config.trading_pairs,balance,config.carryover_vars,exchangeinfo[0])
+		exchangeinfo_raw = await async_client.get_exchange_info()
+		exchangeinfo = []
+		#download initial data for the longer EMA timeframes, so calculations can start immediately
+		#rather than spooling up hundreds of ticks of price data for EMA600, 400 etc
+		for x in config.trading_pairs:
+			init_data_raw = await async_client.get_klines(symbol=x['pair'],interval='5m',limit=601)
+			data = pd.DataFrame(np.array(init_data_raw)[:,0:6],
+					   columns=['open_time', 'open', 'high', 'low', 'close', 'volume'],
+					   dtype='float64')
+			print(f"Initial data loaded - {x['pair']}")
+		
+			for pairs in exchangeinfo_raw['symbols']: 
+				if pairs['symbol'] == x['pair']:
+					exchangeinfo.append(pairs)
 			
-			#if trading_strategy() decided conditions warrant an order, place order
-			if order['side'] != 'none':
+		
+
+		# start any sockets here, i.e. a trade socket
+		xlmusd_kline_5m = bm.kline_socket(symbol=config.trading_pairs[0]['pair'],interval='5m')
+		trade_manager = bm.user_socket()
+		print('Sockets initialized.')
+
+		# then start receiving messages
+		async with xlmusd_kline_5m as xlmusd_kline_5m_message:
+			while time.time() < (starttime + 20*3600) and loop_active_bool==True: #while time not >20h, otherwise reset connection to avoid server-side disconnect
+				global i
+				i += 1
+				#-----
+				#take in new kline data from websocket stream
+				new_data_raw = await xlmusd_kline_5m_message.recv()
 				
-				#if above order wasn't immediately filled, give updates on partial fills
-				#if order['status'] != "FILLED" and order['status'] != "CANCELED" and order['status'] != "EXPIRED":
+				#process raw data into simpler form
+				data = process_raw_klines(new_data_raw,data)
+				#------
+				
+				#------
+				#get account info for balance checking
+				acc_res = await async_client.get_account(recvWindow=10000)
 
-				#	log_data(indicators,data['close'].values[-1],order['time']/1000,order,config.carryover_vars)
-				async with trade_manager as order_response:
-					order = await place_order(async_client, symbol=order['symbol'],side=order['side'],type=order['type'],timeInForce=order['timeInForce'],quantity="{0:.{1}f}".format(order['quantity'],config.trading_pairs[0]['precision']),price="{:4f}".format(order['price']))
-					while order['status'] != "FILLED" and order['status'] != "CANCELED" and order['status'] != "EXPIRED":
-						
-						if order['time']/1000 < (data['open_time'].values[-1]/1000)+3600:
-							#print('aa')
-							try:
-								order_result_raw = await order_response.recv()
-							except BinanceAPIException:
-								print('Socket timeout')
-								break
-							#if update is from order execution (dont care about other account updates on this stream)
-							if order_result_raw['e'] == 'executionReport':
-								order = order_stream_data_process(order_result_raw,datastream='Type2')
-								#stops the 'RuntimeWarning: coroutine 'KeepAliveWebsocket._keepalive_socket' was never awaited' warning?
-								if order['status'] == 'PARTIALLY_FILLED' or order['status'] == 'NEW' or order['status'] == 'TRADE':
-									config.carryover_vars = log_data(indicators,data['close'].values[-1],order['time']/1000,order,config.carryover_vars)
-								else:
+				#update wallet balances
+				balance = wallet_update(acc_res)
+				print(balance)
+				#------
+
+				#send data to functions that calc indicators, calc strat, buy/sell if necessary, and log to console
+				[indicators, order, config.carryover_vars] = trading_strategy(data,config.trading_pairs,balance,config.carryover_vars,exchangeinfo[0])
+				
+				#if trading_strategy() decided conditions warrant an order, place order
+				if order['side'] != 'none':
+					
+					async with trade_manager as order_response:
+						order = await place_order(async_client, symbol=order['symbol'],side=order['side'],type=order['type'],timeInForce=order['timeInForce'],quantity="{0:.{1}f}".format(order['quantity'],config.trading_pairs[0]['precision']),price="{:4f}".format(order['price']))
+						while order['status'] != "FILLED" and order['status'] != "CANCELED" and order['status'] != "EXPIRED":
+							
+							if order['time']/1000 < (data['open_time'].values[-1]/1000)+3600:
+								try:
+									order_result_raw = await order_response.recv()
+								except BinanceAPIException:
+									print('Socket timeout')
 									break
-						#else:
-							##################################
-							#order = await cancel_order(async_client,symbol=order['symbol'],orderId=order['orderId'],recvWindow=10000)
-							#cancel order (been over an hour)#
-							##################################
-					config.carryover_vars = log_data(indicators,data['close'].values[-1],order['time']/1000,order,config.carryover_vars)
-				#else:
+								#if update is from order execution (dont care about other account updates on this stream)
+								if order_result_raw['e'] == 'executionReport':
+									order = order_stream_data_process(order_result_raw,datastream='Type2')
+									config.carryover_vars = log_data(indicators,data['close'].values[-1],order,config.carryover_vars)
+									
+							else:
+								#if order open longer than 1h, cancel
+								order = await async_client.cancel_order(symbol=order['symbol'],orderId=order['orderId'],recvWindow=10000)
+								order['time'] = data['open_time'].values[-1]
+								order['quantity'] = 0
+								order['commission'] = 0
+								
+						config.carryover_vars = log_data(indicators,data['close'].values[-1],order,config.carryover_vars)
+				else:
 					#log data and return updated persistent variables (order b/s complete)
-				#	config.carryover_vars = log_data(indicators,data['close'].values[-1],order['time']/1000,order,config.carryover_vars)
+					order['time'] = data['open_time'].values[-1]
+					config.carryover_vars = log_data(indicators,data['close'].values[-1],order,config.carryover_vars)
 
 
 
@@ -172,6 +170,7 @@ async def place_order(async_client,**order_parameters):
 	
 	try:
 		order_result_raw = await async_client.create_order(**order_parameters)
+		#print(order_result_raw)
 		order_result = order_stream_data_process(order_result_raw,datastream='Type1')			
 		return order_result
 
@@ -298,7 +297,7 @@ def trading_strategy(data,trading_pair,balance,carryover_vars,symbolinfo):
 	
 	#send data to function to calculate indicators
 	indicators = indicator_data(data)
-	
+	global i
 	#reset order info template - if no B/S order is warranted, the empty values will notify other functions
 	#that there wasn't an order this tick
 	order = {
@@ -320,18 +319,15 @@ def trading_strategy(data,trading_pair,balance,carryover_vars,symbolinfo):
 	# BUYING CONDITIONS #
 	#####################
 	#remember to reset - uncomment two ema ifs, and double indent everything below in the buy section
-	if bal < 900: #no position #reset 900 to 1
+	if bal < 900 and i % 5 ==0: #no position #reset 900 to 1
 		if carryover_vars['buy_order_finished'] == 1:
 			#if indicators[1]['EMA400'] > indicators[1]['EMA600']:
 			#	if indicators[0]['EMA50'] < indicators[0]['EMA100'] and indicators[1]['EMA50'] > indicators[1]['EMA100']: #BEST
 			#change below back to balance['USD']
 			
-			carryover_vars['buysize'] = 2#float("{:.0f}".format(0.98*float(balance[trading_pair[0]['quoteAsset']])/data['close'].values[-1]))
-			for filters in symbolinfo['filters']:
-				if filters['filterType'] == 'LOT_SIZE':
-					if carryover_vars['buysize'] > float(filters['maxQty']):
-						carryover_vars['buysize'] = float(filters['maxQty'])
-
+			buyQty = 2#float("{:.0f}".format(0.98*float(balance[trading_pair[0]['quoteAsset']])/data['close'].values[-1]))
+			carryover_vars['buysize'] = buyQty
+			
 			carryover_vars['buyprice'] = float("{:.4f}".format(data['close'].values[-1]))
 			carryover_vars['buycomm'] = carryover_vars['buysize']*carryover_vars['buyprice']*carryover_vars['COMMRATE']
 			carryover_vars['buy_order_finished'] = 0
@@ -339,12 +335,22 @@ def trading_strategy(data,trading_pair,balance,carryover_vars,symbolinfo):
 			#===========
 			#BUY ACTIONS
 			#===========
+			buyType = 'MARKET'
+			for filters in symbolinfo['filters']:
+				if buyType == 'MARKET':
+					if filters['filterType'] == 'MARKET_LOT_SIZE':
+						if buyQty > float(filters['maxQty']):
+							buyQty = float(filters['maxQty'])
+				else:
+					if filters['filterType'] == 'LOT_SIZE':
+						if buyQty > float(filters['maxQty']):
+							buyQty = float(filters['maxQty'])
 			order = {
 				'symbol': trading_pair[0]['pair'], #change back to XLMUSD
 				'side': 'BUY', #buy/sell
-				'type': 'LIMIT', #limit, market, etc
+				'type': buyType,#'LIMIT', #limit, market, etc
 				'timeInForce': 'GTC',
-				'quantity': carryover_vars['buysize'],
+				'quantity': buyQty,#carryover_vars['buysize'],
 				'price': carryover_vars['buyprice'],
 				'orderId': 0,
 				'time': 0,
@@ -360,7 +366,7 @@ def trading_strategy(data,trading_pair,balance,carryover_vars,symbolinfo):
 	# SELLING CONDITIONS #
 	######################
 	#remember to reset conditions - uncomment two ifs and double indent sell action downward
-	elif bal >= 900: #position #reset 900 to 1
+	elif bal >= 900 and i % 5 ==0: #position #reset 900 to 1
 		
 		if carryover_vars['sell_order_finished'] == 1:
 			last_closing_price=data['close'].values[-1]
@@ -370,7 +376,7 @@ def trading_strategy(data,trading_pair,balance,carryover_vars,symbolinfo):
 			#SELL ACTIONS
 			#============
 			sellQty = 2#bal
-			sellType = 'LIMIT'
+			sellType = 'MARKET'
 			for filters in symbolinfo['filters']:
 				if sellType == 'MARKET':
 					if filters['filterType'] == 'MARKET_LOT_SIZE':
@@ -399,7 +405,7 @@ def trading_strategy(data,trading_pair,balance,carryover_vars,symbolinfo):
 	return indicators,order,carryover_vars
 	
 
-def log_data(indicators,close_price,tick_time,order,carryover_vars):
+def log_data(indicators,close_price,order,carryover_vars):
 	
 	#if an order is currently active, log relevant info to console	
 	if order['status'] != '':
@@ -434,7 +440,7 @@ def log_data(indicators,close_price,tick_time,order,carryover_vars):
 			if order['side'] == 'SELL':
 				output += ( #change net gain to: 100* (new bal - old bal) / old bal
 							f"gain: {((order['price']-carryover_vars['buyprice'])*order['quantity'] - order['quantity']*order['price']*carryover_vars['COMMRATE'] - carryover_vars['buycomm']):4.2f} " + 
-							f"gain %: {(100*(((order['price']-carryover_vars['buyprice'])*carryover_vars['buysize'] - order['commission'] - carryover_vars['buycomm'])/(carryover_vars['buysize']*carryover_vars['buyprice']))):3.2f}% "
+							f"gain%: {(100*(((order['price']-carryover_vars['buyprice'])*carryover_vars['buysize'] - order['commission'] - carryover_vars['buycomm'])/(carryover_vars['buysize']*carryover_vars['buyprice']))):3.2f}% "
 							)
 				carryover_vars['sell_order_finished'] = 1
 			else:
@@ -454,7 +460,7 @@ def log_data(indicators,close_price,tick_time,order,carryover_vars):
 					f"EMA25: {indicators[1]['EMA25']:6.4f} " +
 					f"Close Price: {close_price:6.4f} "
 					)
-	dt = datetime.datetime.fromtimestamp(tick_time)
+	dt = datetime.datetime.fromtimestamp(order['time']/1000)
 
 	print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(),output))
 	#print(carryover_vars['buy_order_finished'])
