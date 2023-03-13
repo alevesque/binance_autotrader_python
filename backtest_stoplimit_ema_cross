@@ -3,40 +3,24 @@ import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 
-class RSIStrategy(bt.Strategy):
+class EMACrossStrategy(bt.Strategy):
 
     COMMRATE = 0.001
 
     def __init__(self):
-        self.rsi = bt.talib.RSI(self.data, timeperiod=2)
-        self.rsi6 = bt.talib.RSI(self.data, timeperiod=6)
-        #self.rsi100 = bt.talib.RSI(self.data, timeperiod=100)
-        self.rsi24 = bt.talib.RSI(self.data, timeperiod=24)
 
         self.inds = dict()
-        #for i, d in enumerate(self.datas):
         self.inds['1h'] = dict()
         self.inds['1h']['RSI6'] = bt.talib.RSI(self.datas[1].close, timeperiod=6)
-        #self.rsi_h = bt.talib.RSI(self.data_1h, timeperiod=2)
-        #self.rsi6_h = bt.talib.RSI(self.data['1h'].close, timeperiod=6)
-        #self.rsi100 = bt.talib.RSI(self.data, timeperiod=100)
-        #self.rsi24_h = bt.talib.RSI(self.data_1h, timeperiod=24)
         self.pos = dict()
 
         self.close_price = 0
-    #self.macd = bt.talib.MACD(self.data)
         self.EMA600 = bt.talib.EMA(self.data,timeperiod=600)
         self.EMA400 = bt.talib.EMA(self.data,timeperiod=400)
-        #self.SMA200 = bt.talib.SMA(self.data,timeperiod=200)
-        #self.SMA100 = bt.talib.SMA(self.data,timeperiod=100)
-        #self.SMA50 = bt.talib.SMA(self.data,timeperiod=50)
-        #self.SMA25 = bt.talib.SMA(self.data,timeperiod=25)
+        self.rsi = bt.talib.RSI(self.data, timeperiod=2)
         self.BBANDS20 = bt.talib.BBANDS(self.data.close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         self.EMA100 = bt.talib.EMA(self.data,timeperiod=100)
         self.EMA50 = bt.talib.EMA(self.data,timeperiod=50)
-        self.EMA25 = bt.talib.EMA(self.data,timeperiod=25)
-        #self.SMA5 = bt.talib.SMA(self.data,timeperiod=5)
-        bt.observers.BuySell(bardist=0)
 
         self.plot_time = []
         self.plot_bal = []
@@ -76,20 +60,14 @@ class RSIStrategy(bt.Strategy):
         self.indicator_plot_time.append(self.datas[0].datetime.date(0).isoformat())
         self.indicator_plot_ema400.append(self.inds['1h']['RSI6'][-1])
         # BUYING CONDITIONS
-        if not self.pos['15m']:#self.position:
+        # if no position, and no open buy
+        # if ema400 is over ema 600
+        # if ema50 just crossed over ema100
+        # buy!
+        if not self.pos['15m']:
             if self.buy_order_finished:
-                #if data.close > 1.01*self.SMA200:
                 if self.EMA400 > self.EMA600:
-                    #if self.EMA25[-1] < self.EMA50[-1] and self.EMA25[0] > self.EMA50[0]:
-                    if self.EMA50[-1] < self.EMA100[-1] and self.EMA50[0] > self.EMA100[0]: #BEST
-                        #if data.close[-1] < self.EMA50[-1] and data.close[0] > self.EMA50[0]:
-                        #if self.SMA5[-1] < self.SMA25[-1] and self.SMA5[0] > self.SMA25[0]:
-                        #if self.rsi6 < 65: #and self.rsi[-1] < 15:# and self.rsi[0] < 25:
-
-                        #if abs((float(self.macd[0])-float(self.macd[-1]))/2) < 0.00001 :
-
-                        #if float(self.macd[0])-float(self.macd[-1]) < 0:
-
+                    if self.EMA50[-1] < self.EMA100[-1] and self.EMA50[0] > self.EMA100[0]:
                         self.buysize = float("{:.0f}".format(0.98*self.broker.get_cash()/data.close[0]))
                         self.buyprice = float("{:.4f}".format(self.close_price))
                         self.buy(exectype=bt.Order.Limit, price=self.buyprice, size=self.buysize, valid=bt.date2num(data.num2date())+(16/1440)) # x min * (1h / 60m) * (1d / 24h) // x min to days
@@ -97,21 +75,21 @@ class RSIStrategy(bt.Strategy):
 
         # SELLING CONDITIONS
         if self.position.size > 0:
-            last_closing_price=self.close_price
             if not self.check_order_status(self.order_stop_trail) and not self.check_order_status(self.order_sell_high):
                 self.order_stop_trail = self.sell(
                     exectype=bt.Order.StopTrail,
                     trailpercent=0.0522,
-                    price=last_closing_price,
+                    price=self.close_price,
                     size=self.getposition().size,
                     info={'sellcode': 3},
                     # valid=bt.date2num(data.num2date())+(2880/1440)
                 )
             elif not self.check_order_status(self.order_sell_high):
-                if (last_closing_price >= 1.02*self.BBANDS20.upperband and last_closing_price > self.buyprice):# or self.inds['1h']['RSI6'] > 85: # if trailstop order still open but indicator says sell / price is high then cancel trailstop and sell
+                # if trailstop order still open but indicator says sell / price is high then cancel trailstop and sell
+                if (self.close_price >= 1.02*self.BBANDS20.upperband and self.close_price > self.buyprice):
                     self.order_sell_high = self.sell(
                         exectype=bt.Order.Limit,
-                        price=last_closing_price,
+                        price=self.close_price,
                         size=self.getposition().size,
                         info={'sellcode': 1},
                         valid=bt.date2num(data.num2date())+(30/1440)
@@ -145,7 +123,7 @@ class RSIStrategy(bt.Strategy):
                   f" {order.getstatusname():1} ".ljust(12) +
                   f"Size: ".ljust(6) +
                   f"{order.created.size:6.0f} ".rjust(8)+
-                  f"Price: {self.close_price:6.4f} ")#{order.created.price:6.4f} ")
+                  f"Price: {self.close_price:6.4f} ")
 
         if order.status in [order.Completed]:
             output += ( f"Cost: {order.executed.value:6.2f} " +
@@ -181,7 +159,7 @@ class RSIStrategy(bt.Strategy):
                 if self.current_balance > self.prev_max_balance:
                     self.prev_max_balance = self.current_balance
             else:
-                print('weesnaw')
+                print('Order is not buy or sell(?)')
         elif order.status in [order.Expired]:
             self.buy_order_finished = True
         elif order.status in [order.Accepted]:
@@ -234,8 +212,6 @@ class RSIStrategy(bt.Strategy):
 
 cerebro = bt.Cerebro()
 
-#fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
-#todate = datetime.datetime.strptime('2021-11-25', '%Y-%m-%d')
 fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
 todate = datetime.datetime.strptime('2023-02-10', '%Y-%m-%d')
 data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
@@ -247,9 +223,8 @@ cerebro.adddata(data_1h, name='1h')
 initial_cash = 10000
 cerebro.broker.set_cash(initial_cash)
 
-cerebro.broker.setcommission(commission=RSIStrategy.COMMRATE)
+cerebro.broker.setcommission(commission=EMACrossStrategy.COMMRATE)
 
-cerebro.addstrategy(RSIStrategy)
+cerebro.addstrategy(EMACrossStrategy)
 
 cerebro.run()
-#cerebro.plot(start=datetime.date(2011, 11, 1), end=datetime.date(2011, 11, 11))
