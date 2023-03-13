@@ -44,6 +44,18 @@ class EMACrossStrategy(bt.Strategy):
         self.order = None
         self.order_stop_trail = None
         self.order_sell_high = None
+        self.order_buy = None
+
+    def buy_logic(self):
+        if self.EMA400 > self.EMA600:
+            if self.EMA50[-1] < self.EMA100[-1] and self.EMA50[0] > self.EMA100[0]:
+                return True
+        return False
+
+    def sell_logic(self):
+        if self.close_price >= 1.02*self.BBANDS20.upperband and self.close_price > self.buyprice:
+            return True
+        return False
 
     def log(self, txt, dt=None):
         #Logging function for this strategy
@@ -66,12 +78,16 @@ class EMACrossStrategy(bt.Strategy):
         # buy!
         if not self.pos['15m']:
             if self.buy_order_finished:
-                if self.EMA400 > self.EMA600:
-                    if self.EMA50[-1] < self.EMA100[-1] and self.EMA50[0] > self.EMA100[0]:
-                        self.buysize = float("{:.0f}".format(0.98*self.broker.get_cash()/data.close[0]))
-                        self.buyprice = float("{:.4f}".format(self.close_price))
-                        self.buy(exectype=bt.Order.Limit, price=self.buyprice, size=self.buysize, valid=bt.date2num(data.num2date())+(16/1440)) # x min * (1h / 60m) * (1d / 24h) // x min to days
-                        self.buy_order_finished = False
+                if self.buy_logic():
+                    self.buysize = float("{:.0f}".format(0.98*self.broker.get_cash()/data.close[0]))
+                    self.buyprice = float("{:.4f}".format(self.close_price))
+                    self.order_buy = self.buy(
+                        exectype=bt.Order.Limit,
+                        price=self.buyprice,
+                        size=self.buysize,
+                        valid=bt.date2num(data.num2date())+(16/1440) # x min * (1h / 60m) * (1d / 24h) // x min to days
+                    )
+                    self.buy_order_finished = False
 
         # SELLING CONDITIONS
         if self.position.size > 0:
@@ -86,7 +102,7 @@ class EMACrossStrategy(bt.Strategy):
                 )
             elif not self.check_order_status(self.order_sell_high):
                 # if trailstop order still open but indicator says sell / price is high then cancel trailstop and sell
-                if (self.close_price >= 1.02*self.BBANDS20.upperband and self.close_price > self.buyprice):
+                if self.sell_logic():
                     self.order_sell_high = self.sell(
                         exectype=bt.Order.Limit,
                         price=self.close_price,
