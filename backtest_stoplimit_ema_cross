@@ -198,14 +198,19 @@ class RSIStrategy(bt.Strategy):
     def plot_results(self):
         plt.rc('axes', labelsize=8)
         fig = plt.figure()
-        ax1 = fig.add_subplot(121)
-        ax2 = fig.add_subplot(122)
+
+        # change subplot(x) to 121 if adding subplot
+        # first num is total rows, second is total columns, third is which location to put that named plot (i think)
+        ax1 = fig.add_subplot(111)
         ax1.plot(self.plot_time, self.plot_bal)
-        ax2.plot(self.indicator_plot_time, self.indicator_plot_ema400)
         ax1.title.set_text('Balance Over Time')
         ax1.set_xlabel('Time')
         ax1.set_ylabel('Money')
-        ax2.title.set_text('Indicators')
+
+        #ax2 = fig.add_subplot(122)
+        #ax2.plot(self.indicator_plot_time, self.indicator_plot_ema400)
+        #ax2.title.set_text('Indicators')
+
         plt.xticks(rotation=90, ha='right')
         plt.show()
         pass
