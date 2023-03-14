@@ -1,26 +1,79 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Mar 13 10:31:28 2023
+
+@author: alevesque
+"""
+
 import backtrader as bt
 import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 
-class EMACrossStrategy(bt.Strategy):
+
+######################
+# Bollinger Bands + RSI Strategy - Best Performing Overall
+#
+# Makes good returns AND deals with crashes - better overall returns when you 
+# dump after a week or so then keep trading rather than wait for price to recover
+#
+# Buy and hold - 10x max from jan 1 2020 to dec 2021
+# This strat -   12.6x
+#
+# Buy and hold - 5x max, 2x normal from jan 1 2021 to dec 2021
+# This strat -   9x max, 7.5x total
+#####################
+
+# TALib MA_TYPE List for Reference:
+# 0: Simple_Moving_Average # 2nd best at 73k
+# 1: Exponential_Moving_Average
+# 2: Weighted_Moving_Average
+# 3: Double_Exponential_Moving_Average
+# 4: Triple_Exponential_Moving_Average
+# 5: Triangular_Moving_Average BEST SO FAR AT 79k
+# 6: Kaufman_Adaptive_Moving_Average
+# 7: MESA_Adaptive_Moving_Average
+# 8: Triple_Generalized_Double_Exponential
+
+
+class GenericStrategy(bt.Strategy):
 
     COMMRATE = 0.001
 
     def __init__(self):
+        self.rsi = bt.talib.RSI(self.data, timeperiod=2)
+        self.rsi6 = bt.talib.RSI(self.data, timeperiod=6)
+        self.rsi50 = bt.talib.RSI(self.data, timeperiod=50)
+        self.rsi24 = bt.talib.RSI(self.data, timeperiod=24)
 
-        self.inds = dict()
-        self.inds['1h'] = dict()
-        self.inds['1h']['RSI6'] = bt.talib.RSI(self.datas[1].close, timeperiod=6)
+        #self.inds = dict()
+        #for i, d in enumerate(self.datas):
+        #self.inds['1h'] = dict()
+        #self.inds['1h']['RSI6'] = bt.talib.RSI(self.datas[1].close, timeperiod=6)
+        
+        #self.rsi_h = bt.talib.RSI(self.data_1h, timeperiod=2)
+        #self.rsi6_h = bt.talib.RSI(self.data['1h'].close, timeperiod=6)
+        #self.rsi100 = bt.talib.RSI(self.data, timeperiod=100)
+        #self.rsi24_h = bt.talib.RSI(self.data_1h, timeperiod=24)
         self.pos = dict()
 
         self.close_price = 0
+        self.macd = bt.talib.MACD(self.data)
         self.EMA600 = bt.talib.EMA(self.data,timeperiod=600)
         self.EMA400 = bt.talib.EMA(self.data,timeperiod=400)
-        self.rsi = bt.talib.RSI(self.data, timeperiod=2)
+        #self.SMA200 = bt.talib.SMA(self.data,timeperiod=200)
+        self.SMA400 = bt.talib.SMA(self.data, timeperiod=400)
+        self.SMA600 = bt.talib.SMA(self.data, timeperiod=600)
+        self.SMA100 = bt.talib.SMA(self.data,timeperiod=100)
+        self.SMA50 = bt.talib.SMA(self.data,timeperiod=50)
+        self.SMA25 = bt.talib.SMA(self.data,timeperiod=25)
+        
         self.BBANDS20 = bt.talib.BBANDS(self.data.close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         self.EMA100 = bt.talib.EMA(self.data,timeperiod=100)
         self.EMA50 = bt.talib.EMA(self.data,timeperiod=50)
+        self.EMA25 = bt.talib.EMA(self.data,timeperiod=25)
+        #self.SMA5 = bt.talib.SMA(self.data,timeperiod=5)
+
 
         self.plot_time = []
         self.plot_bal = []
@@ -37,6 +90,8 @@ class EMACrossStrategy(bt.Strategy):
         self.buy_order_finished = True
         self.sell_cond_count = {'LimitBuy': [0, 0, 0],
                                 'LimitSell': [0, 0, 0],
+                                'MarketBuy': [0, 0, 0],
+                                'MarketSell': [0, 0, 0],
                                 'StopTrailBuy': [0, 0, 0],
                                 'StopTrailSell': [0, 0, 0],
                                 }
@@ -46,21 +101,43 @@ class EMACrossStrategy(bt.Strategy):
         self.order_sell_high = None
         self.order_buy = None
 
-    def buy_logic(self):
+    def log(self, txt, dt=None):
+        #Logging function for this strategy
+        dt = self.datas[0].datetime
+        print('%s, %s, %s' % (dt.date(0).isoformat(), dt.time(), txt))
+
+    def buy_logic(self, data):
+        ######### TODO: INSERT BUY CONDITIONS HERE ##########
+        ######### TODO: GO THROUGH ALL OTHER PRIOR STRATS AND TRY WITH NEW STOPLIMIT SELL CONDS ########
+        ######### TODO: DELETE OTHER STRATS FROM GITHUB AND PROJECT (ALREADY BACKED UP TO ARCHIVE_OUTDATED BRANCH OF GITHUB #######
+        ######### TODO: THEN UPDATE BINANCE FILE WITH BETTER CODE AND NEW LOGIC #########
+        ######### TODO: THEN LET IT RIP #########
+        
+        ### TRY TRAILING STOP _BUY_, MAYBE WITH DIFF CONDITIONS ###
+        '''
+        'backtest_stoplimit_ema_cross.py'
+        w/ market sell and 1.02*bbandupper sell cond, NOT taking into account commrate for sell>buy check (no change)
+        Sell Condition Summary:
+        	Type         	Count	Avg Profit	 Avg Profit %
+        	LimitBuy     	  122	      0.00	        0.00%
+        	LimitSell    	    0	      0.00	        0.00%
+        	MarketBuy    	    0	      0.00	        0.00%
+        	MarketSell   	   17	   2878.15	       12.47%
+        	StopTrailBuy 	    0	      0.00	        0.00%
+        	StopTrailSell	  105	   -256.35	       -0.59%
+        Initial Balance: 10000.00, Max Balance: 46586.87, End Balance: 34503.39
+        '''
         if self.EMA400 > self.EMA600:
             if self.EMA50[-1] < self.EMA100[-1] and self.EMA50[0] > self.EMA100[0]:
                 return True
         return False
 
-    def sell_logic(self):
+    def sell_logic(self, last_closing_price, data):
+        ############# TODO: INSERT CONDITIONS HERE ##############
+        # think this works pretty well, leave for now #
         if self.close_price >= 1.02*self.BBANDS20.upperband and self.close_price > self.buyprice:
             return True
         return False
-
-    def log(self, txt, dt=None):
-        #Logging function for this strategy
-        dt = self.datas[0].datetime
-        print('%s, %s, %s' % (dt.date(0).isoformat(), dt.time(), txt))
 
     def next(self):
         for i, d in enumerate(self.datas):
@@ -69,23 +146,18 @@ class EMACrossStrategy(bt.Strategy):
 
         data = self.datas[0]
         self.close_price = data.close[0]
-        self.indicator_plot_time.append(self.datas[0].datetime.date(0).isoformat())
-        self.indicator_plot_ema400.append(self.inds['1h']['RSI6'][-1])
+
         # BUYING CONDITIONS
-        # if no position, and no open buy
-        # if ema400 is over ema 600
-        # if ema50 just crossed over ema100
-        # buy!
         if not self.pos['15m']:
-            if self.buy_order_finished:
-                if self.buy_logic():
+            if self.buy_order_finished and not self.check_order_status(self.order_stop_trail) and not self.check_order_status(self.order_sell_high):
+                if self.buy_logic(data):
                     self.buysize = float("{:.0f}".format(0.98*self.broker.get_cash()/data.close[0]))
                     self.buyprice = float("{:.4f}".format(self.close_price))
                     self.order_buy = self.buy(
                         exectype=bt.Order.Limit,
                         price=self.buyprice,
                         size=self.buysize,
-                        valid=bt.date2num(data.num2date())+(16/1440) # x min * (1h / 60m) * (1d / 24h) // x min to days
+                        valid=bt.date2num(data.num2date())+(20/1440) # x min * (1h / 60m) * (1d / 24h) // x min to days
                     )
                     self.buy_order_finished = False
 
@@ -98,17 +170,17 @@ class EMACrossStrategy(bt.Strategy):
                     price=self.close_price,
                     size=self.getposition().size,
                     info={'sellcode': 3},
-                    # valid=bt.date2num(data.num2date())+(2880/1440)
+                    # valid=bt.date2num(data.num2date())+(12240/1440)
                 )
             elif not self.check_order_status(self.order_sell_high):
                 # if trailstop order still open but indicator says sell / price is high then cancel trailstop and sell
-                if self.sell_logic():
+                if self.sell_logic(self.close_price, data):
                     self.order_sell_high = self.sell(
                         exectype=bt.Order.Limit,
                         price=self.close_price,
                         size=self.getposition().size,
                         info={'sellcode': 1},
-                        valid=bt.date2num(data.num2date())+(30/1440)
+                        valid=bt.date2num(data.num2date())+(31/1440)
                     )
                     self.cancel(self.order_stop_trail)
 
@@ -175,7 +247,7 @@ class EMACrossStrategy(bt.Strategy):
                 if self.current_balance > self.prev_max_balance:
                     self.prev_max_balance = self.current_balance
             else:
-                print('Order is not buy or sell(?)')
+                print('weesnaw')
         elif order.status in [order.Expired]:
             self.buy_order_finished = True
         elif order.status in [order.Accepted]:
@@ -229,18 +301,20 @@ class EMACrossStrategy(bt.Strategy):
 cerebro = bt.Cerebro()
 
 fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
-todate = datetime.datetime.strptime('2023-02-10', '%Y-%m-%d')
-data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
-#data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
-data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+todate = datetime.datetime.strptime('2023-01-01', '%Y-%m-%d')
 
+#data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+#data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+
+#cerebro.adddata(data_5m, name='5m')
 cerebro.adddata(data_15m, name='15m')
-cerebro.adddata(data_1h, name='1h')
+#cerebro.adddata(data_1h, name='1h')
 initial_cash = 10000
 cerebro.broker.set_cash(initial_cash)
 
-cerebro.broker.setcommission(commission=EMACrossStrategy.COMMRATE)
+cerebro.broker.setcommission(commission=GenericStrategy.COMMRATE)
 
-cerebro.addstrategy(EMACrossStrategy)
+cerebro.addstrategy(GenericStrategy)
 
 cerebro.run()
