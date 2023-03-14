@@ -1,7 +1,35 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Mar 13 10:31:28 2023
+
+@author: alevesque
+"""
+
 import backtrader as bt
 import datetime
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+######################
+# Generic Strategy - For testing new strategies easily
+#
+#
+#
+#
+#####################
+
+# TALib MA_TYPE List for Reference:
+# 0: Simple_Moving_Average # 2nd best at 73k
+# 1: Exponential_Moving_Average
+# 2: Weighted_Moving_Average
+# 3: Double_Exponential_Moving_Average
+# 4: Triple_Exponential_Moving_Average
+# 5: Triangular_Moving_Average BEST SO FAR AT 79k
+# 6: Kaufman_Adaptive_Moving_Average
+# 7: MESA_Adaptive_Moving_Average
+# 8: Triple_Generalized_Double_Exponential
+
 
 class GenericStrategy(bt.Strategy):
 
@@ -10,13 +38,14 @@ class GenericStrategy(bt.Strategy):
     def __init__(self):
         self.rsi = bt.talib.RSI(self.data, timeperiod=2)
         self.rsi6 = bt.talib.RSI(self.data, timeperiod=6)
-        #self.rsi100 = bt.talib.RSI(self.data, timeperiod=100)
-        self.rsi24 = bt.talib.RSI(self.data, timeperiod=24)
+        # self.rsi50 = bt.talib.RSI(self.data, timeperiod=50)
+        self.rsi12 = bt.talib.RSI(self.data, timeperiod=12)
 
-        self.inds = dict()
+        #self.inds = dict()
         #for i, d in enumerate(self.datas):
-        self.inds['1h'] = dict()
-        self.inds['1h']['RSI6'] = bt.talib.RSI(self.datas[1].close, timeperiod=6)
+        #self.inds['1h'] = dict()
+        #self.inds['1h']['RSI6'] = bt.talib.RSI(self.datas[1].close, timeperiod=6)
+        
         #self.rsi_h = bt.talib.RSI(self.data_1h, timeperiod=2)
         #self.rsi6_h = bt.talib.RSI(self.data['1h'].close, timeperiod=6)
         #self.rsi100 = bt.talib.RSI(self.data, timeperiod=100)
@@ -24,37 +53,43 @@ class GenericStrategy(bt.Strategy):
         self.pos = dict()
 
         self.close_price = 0
-        #self.macd = bt.talib.MACD(self.data)
-        self.EMA600 = bt.talib.EMA(self.data,timeperiod=600)
-        self.EMA400 = bt.talib.EMA(self.data,timeperiod=400)
-        #self.SMA200 = bt.talib.SMA(self.data,timeperiod=200)
-        self.SMA400 = bt.talib.SMA(self.data, timeperiod=400)
-        self.SMA600 = bt.talib.SMA(self.data, timeperiod=600)
-        self.SMA100 = bt.talib.SMA(self.data,timeperiod=100)
-        self.SMA50 = bt.talib.SMA(self.data,timeperiod=50)
-        self.SMA25 = bt.talib.SMA(self.data,timeperiod=25)
+        self.macd = bt.talib.MACD(self.data)
+       
+        # self.SMA200 = bt.talib.SMA(self.data,timeperiod=200)
+        # self.SMA400 = bt.talib.SMA(self.data, timeperiod=400)
+        # self.SMA600 = bt.talib.SMA(self.data, timeperiod=600)
+        # self.SMA100 = bt.talib.SMA(self.data,timeperiod=100)
+        # self.SMA50 = bt.talib.SMA(self.data,timeperiod=50)
+        # self.SMA25 = bt.talib.SMA(self.data,timeperiod=25)
+        #self.SMA5 = bt.talib.SMA(self.data,timeperiod=5)
+        
         self.BBANDS20 = bt.talib.BBANDS(self.data.close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        self.BBANDS20_5m = bt.talib.BBANDS(self.datas[1].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        
+        # self.EMA600 = bt.talib.EMA(self.data,timeperiod=600)
+        # self.EMA400 = bt.talib.EMA(self.data,timeperiod=400)
         self.EMA100 = bt.talib.EMA(self.data,timeperiod=100)
         self.EMA50 = bt.talib.EMA(self.data,timeperiod=50)
         self.EMA25 = bt.talib.EMA(self.data,timeperiod=25)
-        #self.SMA5 = bt.talib.SMA(self.data,timeperiod=5)
-
+        
+        # self.shootingstar = bt.talib.CDLSHOOTINGSTAR(self.data.open, self.data.high, self.data.low, self.data.close)
 
         self.plot_time = []
         self.plot_bal = []
         self.indicator_plot_time = []
         self.indicator_plot_ema400 = []
         self.current_balance = 0
-        self.buyprice = 0
+        # self.buyprice = 0
         self.buytime = 0
         self.buycomm = 0
-        self.buysize = 0
+        # self.buysize = 0
         self.sellprice = 0
         self.selltime = 0
         self.prev_max_balance = 0
-        self.buy_order_finished = True
         self.sell_cond_count = {'LimitBuy': [0, 0, 0],
                                 'LimitSell': [0, 0, 0],
+                                'MarketBuy': [0, 0, 0],
+                                'MarketSell': [0, 0, 0],
                                 'StopTrailBuy': [0, 0, 0],
                                 'StopTrailSell': [0, 0, 0],
                                 }
@@ -66,67 +101,70 @@ class GenericStrategy(bt.Strategy):
 
     def log(self, txt, dt=None):
         #Logging function for this strategy
-        dt = self.datas[0].datetime
-        print('%s, %s, %s' % (dt.date(0).isoformat(), dt.time(), txt))
+        if txt:
+            dt = self.datas[0].datetime
+            print('%s, %s, %s' % (dt.date(0).isoformat(), dt.time(), txt))
 
-    def buy_logic(self):
+    def buy_logic(self, data):
         ######### TODO: INSERT BUY CONDITIONS HERE ##########
-        ######### TODO: GO THROUGH ALL OTHER PRIOR STRATS AND TRY WITH NEW STOPLIMIT SELL CONDS ########
-        ######### TODO: DELETE OTHER STRATS FROM GITHUB AND PROJECT (ALREADY BACKED UP TO ARCHIVE_OUTDATED BRANCH OF GITHUB #######
-        ######### TODO: THEN UPDATE BINANCE FILE WITH BETTER CODE AND NEW LOGIC #########
-        ######### TODO: THEN LET IT RIP #########
-        if 0: # update logic
-                    return True
+        if 1:
+            return True
         return False
 
-    def sell_logic(self, last_closing_price, penul_close_price):
+    def sell_logic(self):
         ############# TODO: INSERT CONDITIONS HERE ##############
-        if 0:
-          return True
+        # think this works pretty well, leave for now #
+        if self.datas[1].close[0] >= 1.02*self.BBANDS20_5m.upperband:
+            return True
         return False
 
     def next(self):
+        
+        # if multiple data sources
         for i, d in enumerate(self.datas):
             dt, dn = self.datetime.date(), d._name
             self.pos[d._name] = self.getposition(d).size
-
+        
         data = self.datas[0]
         self.close_price = data.close[0]
 
         # BUYING CONDITIONS
-        if not self.pos['15m']:
-            if self.buy_order_finished and not self.check_order_status(self.order_stop_trail) and not self.check_order_status(self.order_sell_high):
-                if self.buy_logic():
-                    self.buysize = float("{:.0f}".format(0.98*self.broker.get_cash()/data.close[0]))
-                    self.buyprice = float("{:.4f}".format(self.close_price))
+        if not self.pos['15m']: #if multiple data sources
+            if not self.check_order_status(self.order_buy, self.order_stop_trail, self.order_sell_high):
+                if self.buy_logic(data):
+                    buysize = float("{:.0f}".format(0.9*self.broker.get_cash()/data.close[0]))
+                    buyprice = float("{:.4f}".format(self.close_price))
                     self.order_buy = self.buy(
-                        exectype=bt.Order.Limit,
-                        price=self.buyprice,
-                        size=self.buysize,
-                        valid=bt.date2num(data.num2date())+(16/1440) # x min * (1h / 60m) * (1d / 24h) // x min to days
+                        exectype = bt.Order.Limit,
+                        #trailpercent = 0.015,
+                        price = buyprice,
+                        size = buysize,
+                        valid=bt.date2num(data.num2date())+(20/1440) # x min * (1h / 60m) * (1d / 24h) // x min to days
                     )
-                    self.buy_order_finished = False
 
         # SELLING CONDITIONS
         if self.position.size > 0:
-            if not self.check_order_status(self.order_stop_trail) and not self.check_order_status(self.order_sell_high):
+            if not self.check_order_status(self.order_stop_trail, self.order_sell_high):
                 self.order_stop_trail = self.sell(
-                    exectype=bt.Order.StopTrail,
-                    trailpercent=0.0522,
-                    price=self.close_price,
-                    size=self.getposition().size,
-                    info={'sellcode': 3},
-                    # valid=bt.date2num(data.num2date())+(2880/1440)
+                    exectype = bt.Order.StopTrail,
+                    trailpercent = 0.0522,
+                    price = self.close_price,
+                    size = self.getposition().size,
+                    info = {'sellcode': 3},
+                    # valid=bt.date2num(data.num2date())+(12240/1440)
                 )
+
             elif not self.check_order_status(self.order_sell_high):
                 # if trailstop order still open but indicator says sell / price is high then cancel trailstop and sell
-                if self.sell_logic(self.close_price, data.close[-1]):
+                if self.sell_logic():
                     self.order_sell_high = self.sell(
-                        exectype=bt.Order.Limit,
-                        price=self.close_price,
-                        size=self.getposition().size,
-                        info={'sellcode': 1},
-                        valid=bt.date2num(data.num2date())+(30/1440)
+                        data = self.datas[1],
+                        exectype = bt.Order.StopTrail,
+                        trailpercent = 0.01,
+                        price = self.close_price,
+                        size = self.getposition().size,
+                        info = {'sellcode': 1},
+                        # valid = bt.date2num(data.num2date())+(31/1440)
                     )
                     self.cancel(self.order_stop_trail)
 
@@ -148,25 +186,33 @@ class GenericStrategy(bt.Strategy):
             order_type = 'Buy'
             net_gain = 0
             net_gain_percent = 0
+            order_value = order.executed.value
         else:
             order_type = 'Sell'
-            net_gain = (order.executed.price-self.buyprice)*self.buysize - order.executed.comm - self.buycomm
-            net_gain_percent = 100*net_gain/(self.buysize*self.buyprice)
-
-        output = (f"Order: {order.ref:3d} Type: {order_name:<9} {order_type:<4} Status:" +
-                  f" {order.getstatusname():1} ".ljust(12) +
-                  f"Size: ".ljust(6) +
-                  f"{order.created.size:6.0f} ".rjust(8)+
-                  f"Price: {self.close_price:6.4f} ")
+        output = ('')
+            # print(order_name, order.executed.price, order.executed.size, order.executed.value, order.executed.comm)
+        if not self.check_order_status(order):
+            output = (f"Order: {order.ref:3d} Type: {order_name:<9} {order_type:<4} Status:" +
+                      f" {order.getstatusname():1} ".ljust(12) +
+                      f"Size: ".ljust(6) +
+                      f"{order.created.size:6.0f} ".rjust(8)+
+                      f"Price: {order.executed.price:6.4f} ")
 
         if order.status in [order.Completed]:
-            output += ( f"Cost: {order.executed.value:6.2f} " +
-                        f"Comm: {order.executed.comm:4.2f} " +
-                        f"RSI: {float(self.rsi[0]):3.2f} "
+            order_value = abs(order.executed.price*order.executed.size)
+            # order.executed.value is buy cost of original position
+            net_gain = order_value-order.executed.value*(1+GenericStrategy.COMMRATE) - order.executed.comm
+            if order.executed.value != 0:
+                net_gain_percent = 100*net_gain/(order.executed.value)
+            else:
+                net_gain_percent = None
+            output += ( f"Value: {order_value:6.2f} " +
+                        f"Comm: {order.executed.comm:4.2f} "
+                        # + f"RSI: {float(self.rsi[0]):3.2f} "
                         )
             if not order.isbuy():
-                output += ( f"net gain: {net_gain:4.2f} " +
-                            f"net gain %: {net_gain_percent:3.2f}% "
+                output += ( f"net gain: {net_gain:4.2f} | " +
+                            f"{net_gain_percent:3.2f}% "
                             )
                 self.plot_time.append(self.datas[0].datetime.date(0).isoformat())
                 self.plot_bal.append(order.executed.value)
@@ -174,10 +220,10 @@ class GenericStrategy(bt.Strategy):
         self.log(output)
         return
 
-    def check_order_status(self, order):
-        if order:
-            if order.alive():
-                return True
+    def check_order_status(self, *args):
+        orders = (item for item in args if item is not None)
+        if orders:
+            return any([True if order.alive() else False for order in orders])
         return False
 
     def notify_order(self, order):
@@ -187,7 +233,6 @@ class GenericStrategy(bt.Strategy):
             if order.isbuy():
                 self.buycomm = order.executed.comm
                 self.buytime = order.executed.dt
-                self.buy_order_finished = True
             elif order.issell():
                 self.current_balance = self.broker.get_cash()
                 if self.current_balance > self.prev_max_balance:
@@ -195,7 +240,7 @@ class GenericStrategy(bt.Strategy):
             else:
                 print('weesnaw')
         elif order.status in [order.Expired]:
-            self.buy_order_finished = True
+            pass
         elif order.status in [order.Accepted]:
             pass
         elif order.status in [order.Submitted]:
@@ -247,15 +292,17 @@ class GenericStrategy(bt.Strategy):
 cerebro = bt.Cerebro()
 
 fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
-todate = datetime.datetime.strptime('2023-02-10', '%Y-%m-%d')
+todate = datetime.datetime.strptime('2020-01-15', '%Y-%m-%d')
 
-#data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+
 data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
-data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+#data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
 
-#cerebro.adddata(data_5m, name='5m')
+
 cerebro.adddata(data_15m, name='15m')
-cerebro.adddata(data_1h, name='1h')
+cerebro.adddata(data_5m, name='5m')
+#cerebro.adddata(data_1h, name='1h')
 initial_cash = 10000
 cerebro.broker.set_cash(initial_cash)
 
