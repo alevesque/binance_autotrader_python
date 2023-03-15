@@ -1,0 +1,129 @@
+import ast
+
+import backtrader as bt
+import datetime
+from backtest_generic import GenericStrategy
+import matplotlib.pyplot as plt
+import csv
+import itertools
+
+init_cash = 10000
+fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
+# todate = datetime.datetime.strptime('2023-01-01', '%Y-%m-%d')
+todate = datetime.datetime.strptime('2020-01-02', '%Y-%m-%d')
+data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+#data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+
+# come up with values
+buy_logic_multiplier = [1.0, 0.9, 1.02]
+buy_logic_rsi_limit = 25
+sell_logic_multiplier = 1.02
+buy_order_duration = 16
+sell_order_duration = 31
+order_stop_trail_trailpercent = 0.0522
+opt_index = range(len(buy_logic_multiplier))
+
+class BBandMixTimescale(GenericStrategy):
+    def __init__(self):
+        super().__init__()
+        self.initial_cash = init_cash
+        ##########
+        # Variables for optimization
+        ##########
+        self.quiet_mode = True
+        self.buy_logic_multiplier = buy_logic_multiplier[x]
+        self.buy_logic_rsi_limit = buy_logic_rsi_limit
+        self.sell_logic_multiplier = sell_logic_multiplier
+        self.buy_order_duration = buy_order_duration
+        self.sell_order_duration = sell_order_duration
+        self.order_stop_trail_trailpercent = order_stop_trail_trailpercent
+
+
+def read_results():
+    line_count = 0
+    best_max_bal = 0
+    best_max_bal_index = 0
+    best_end_bal = 0
+    best_end_bal_index = 0
+    with open('opt_log.txt', 'r', newline='\n') as opt_log:
+        lei = csv.reader(opt_log, delimiter=',')
+        for leyo in lei:
+            # leyo = opt_log.readline()
+            if not leyo:
+                break
+            if float(leyo[6]) > best_max_bal:
+                best_max_bal = leyo[6]
+                best_max_bal_index = line_count
+                pass
+            if float(leyo[7]) > best_end_bal:
+                best_end_bal = leyo[7]
+                best_end_bal_index = line_count
+                pass
+            line_count += 1
+    format_results([best_max_bal_index, best_end_bal_index])
+
+
+def get_csv_line(path, line_number):
+    with open(path) as f:
+        return next(itertools.islice(csv.reader(f), line_number, None))
+
+
+def format_results(best_indices):
+    best_line = []
+    log_var_count = range(6)
+    print('#'*30)
+    print('# Optimization Summary:\n')
+    print('#'*30)
+    for index, value in enumerate(best_indices):
+        best_line.append(get_csv_line('opt_log.txt', value))
+        print('-' * 30 + '\n\tParameters:')
+        print(f"\t{'Buy Logic Mult: ':<19}\t{best_line[index][0]:>6}\n" +
+              f"\t{'Buy Logic RSI Lim: ':<19}\t{best_line[index][1]:>6}\n" +
+              f"\t{'Sell Logic Mult: ':<19}\t{best_line[index][2]:>6}\n" +
+              f"\t{'Buy Order Duration: ':<19}\t{best_line[index][3]:<6}\n" +
+              f"\t{'Sell Order Duration: ':<19}\t{best_line[index][4]:<6}\n" +
+              f"\t{'StopTrail %: ':<19}\t{best_line[index][5]:<6}\n")
+        print(f"\t{'Type':<13}\t{'Count':<5}\t{'Avg Profit':<10}\t {'Avg Profit %':<12}")
+        sell_cond_count = ast.literal_eval(best_line[index][8])
+        for key in sell_cond_count:
+            if sell_cond_count[key][0]:
+                avg_profit = sell_cond_count[key][1]
+                avg_profit_percent = sell_cond_count[key][2]
+            else:
+                avg_profit = 0
+                avg_profit_percent = 0
+            print(f'\t{key:<13}\t{sell_cond_count[key][0]:5.0f}\t{avg_profit:10.2f}\t{avg_profit_percent:12.2f}%')
+        print(f'Initial Balance: {init_cash:.2f}, Max Balance: {float(best_line[index][6]):.2f}, End Balance: {float(best_line[index][7]):.2f}\n')
+
+
+def plot_results(self):
+    plt.bar('axes', labelsize=8)
+    fig = plt.figure()
+
+    ax1 = fig.add_subplot(111)
+    ax1.plot(self.plot_time, self.plot_bal)
+    ax1.title.set_text('Balance Over Time')
+    ax1.set_xlabel('Time')
+    ax1.set_ylabel('Money')
+
+
+    plt.xticks(rotation=90, ha='right')
+    plt.show()
+    pass
+
+
+def init_cerebro():
+    cerebro = bt.Cerebro()
+    cerebro.adddata(data_5m, name='5m')
+    cerebro.adddata(data_15m, name='15m')
+    #cerebro.adddata(data_1h, name='1h')
+    cerebro.broker.set_cash(init_cash)
+    cerebro.broker.setcommission(commission=GenericStrategy.COMMRATE)
+    cerebro.addstrategy(BBandMixTimescale)
+    cerebro.run()
+
+
+for x in opt_index:
+    init_cerebro()
+read_results()
