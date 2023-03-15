@@ -2,10 +2,8 @@ import backtrader as bt
 import matplotlib.pyplot as plt
 
 ######################
+#
 # Generic Strategy - For testing new strategies easily
-#
-#
-#
 #
 #####################
 
@@ -151,7 +149,6 @@ class GenericStrategy(bt.Strategy):
         else:
             order_type = 'Sell'
         output = ('')
-        # print(order_name, order.executed.price, order.executed.size, order.executed.value, order.executed.comm)
         if not self.check_order_status(order):
             output = (f"Order: {order.ref:3d} Type: {order_name:<9} {order_type:<4} Status:" +
                       f" {order.getstatusname():1} ".ljust(12) +
@@ -232,7 +229,6 @@ class GenericStrategy(bt.Strategy):
                 print(f'\t{key:<13}\t{self.sell_cond_count[key][0]:5.0f}\t{avg_profit:10.2f}\t{avg_profit_percent:12.2f}%')
             print(f'Initial Balance: {self.initial_cash:.2f}, Max Balance: {self.prev_max_balance:.2f}, End Balance: {self.current_balance:.2f}')
             self.plot_results()
-            
         log_vars = (self.buy_logic_multiplier,
                     self.buy_logic_rsi_limit,
                     self.sell_logic_multiplier,
