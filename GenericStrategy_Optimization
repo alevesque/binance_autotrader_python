@@ -9,14 +9,14 @@ import itertools
 
 init_cash = 10000
 fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
-# todate = datetime.datetime.strptime('2023-01-01', '%Y-%m-%d')
-todate = datetime.datetime.strptime('2020-01-02', '%Y-%m-%d')
+todate = datetime.datetime.strptime('2023-01-01', '%Y-%m-%d')
+#todate = datetime.datetime.strptime('2020-01-02', '%Y-%m-%d')
 data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
 data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
 #data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
 
 # come up with values
-buy_logic_multiplier = [1.0, 0.9, 1.02]
+buy_logic_multiplier = [1.0]# , 0.9, 1.02]
 buy_logic_rsi_limit = 25
 sell_logic_multiplier = 1.02
 buy_order_duration = 16
@@ -42,9 +42,9 @@ class BBandMixTimescale(GenericStrategy):
 
 def read_results():
     line_count = 0
-    best_max_bal = 0
+    best_max_bal = 0.0
     best_max_bal_index = 0
-    best_end_bal = 0
+    best_end_bal = 0.0
     best_end_bal_index = 0
     with open('opt_log.txt', 'r', newline='\n') as opt_log:
         lei = csv.reader(opt_log, delimiter=',')
@@ -53,11 +53,11 @@ def read_results():
             if not leyo:
                 break
             if float(leyo[6]) > best_max_bal:
-                best_max_bal = leyo[6]
+                best_max_bal = float(leyo[6])
                 best_max_bal_index = line_count
                 pass
             if float(leyo[7]) > best_end_bal:
-                best_end_bal = leyo[7]
+                best_end_bal = float(leyo[7])
                 best_end_bal_index = line_count
                 pass
             line_count += 1
@@ -88,8 +88,8 @@ def format_results(best_indices):
         sell_cond_count = ast.literal_eval(best_line[index][8])
         for key in sell_cond_count:
             if sell_cond_count[key][0]:
-                avg_profit = sell_cond_count[key][1]
-                avg_profit_percent = sell_cond_count[key][2]
+                avg_profit = sell_cond_count[key][1]/sell_cond_count[key][0]
+                avg_profit_percent = sell_cond_count[key][2]/sell_cond_count[key][0]
             else:
                 avg_profit = 0
                 avg_profit_percent = 0
