@@ -2,8 +2,10 @@ import backtrader as bt
 import matplotlib.pyplot as plt
 
 ######################
-#
 # Generic Strategy - For testing new strategies easily
+#
+#
+#
 #
 #####################
 
@@ -222,10 +224,8 @@ class GenericStrategy(bt.Strategy):
             print(f"\t{'Type':<13}\t{'Count':<5}\t{'Avg Profit':<10}\t {'Avg Profit %':<12}")
             for key in self.sell_cond_count:
                 if self.sell_cond_count[key][0]:
-                    self.sell_cond_count[key][1] /= self.sell_cond_count[key][0]
-                    avg_profit = self.sell_cond_count[key][1]
-                    self.sell_cond_count[key][2] /= self.sell_cond_count[key][0]
-                    avg_profit_percent = self.sell_cond_count[key][2]
+                    avg_profit = self.sell_cond_count[key][1]/self.sell_cond_count[key][0]
+                    avg_profit_percent = self.sell_cond_count[key][2]/self.sell_cond_count[key][0]
                 else:
                     avg_profit = 0
                     avg_profit_percent = 0
@@ -249,7 +249,6 @@ class GenericStrategy(bt.Strategy):
 
         with open('opt_log.txt', 'a', newline='\n') as opt_log:
             opt_log.write(log_line)
-        
         pass
 
 
