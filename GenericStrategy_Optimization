@@ -17,14 +17,15 @@ data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, 
 #data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
 
 # come up with values
-buy_logic_multiplier = range(95, 120, 5)
-buy_logic_rsi_limit = range(15, 40, 5)
-sell_logic_multiplier = range(95, 120, 5)
+buy_logic_multiplier = [102]  # range(95, 120, 5)
+buy_logic_rsi_limit = [25]  # range(15, 40, 5)
+sell_logic_multiplier = [102]  # range(95, 120, 5)
 buy_order_duration = [16]
 sell_order_duration = [31]
-order_stop_trail_trailpercent = range(1, 8, 1)# [0.0522]
+order_stop_trail_trailpercent = [5.22]#range(1, 8, 1)# [0.0522]
 
 class BBandMixTimescale(GenericStrategy):
+    
     def __init__(self):
         super().__init__()
         self.initial_cash = init_cash
@@ -38,6 +39,19 @@ class BBandMixTimescale(GenericStrategy):
         self.buy_order_duration = buy_order_duration[d]
         self.sell_order_duration = sell_order_duration[e]
         self.order_stop_trail_trailpercent = order_stop_trail_trailpercent[f]/100
+    
+    def buy_logic(self):
+        ######### TODO: INSERT BUY CONDITIONS HERE ##########
+        if self.datas[1].low[0] <= self.buy_logic_multiplier*self.BBANDS20.lowerband and self.rsi12 < self.buy_logic_rsi_limit:
+            return True
+        return False
+
+    def sell_logic(self):
+        ############# TODO: INSERT CONDITIONS HERE ##############
+        # think this works pretty well, leave for now #
+        if self.datas[0].high[0] >= self.sell_logic_multiplier*self.BBANDS20_5m.upperband:
+            return True
+        return False
 
 
 def read_results():
