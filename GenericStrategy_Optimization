@@ -5,6 +5,8 @@ from backtest_generic import GenericStrategy
 import matplotlib.pyplot as plt
 import csv
 import itertools
+from sklearn import preprocessing
+import numpy as np
 
 init_cash = 10000
 fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
@@ -21,7 +23,6 @@ sell_logic_multiplier = range(95, 120, 5)
 buy_order_duration = [16]
 sell_order_duration = [31]
 order_stop_trail_trailpercent = range(1, 8, 1)# [0.0522]
-# opt_index = range(len(buy_logic_multiplier))
 
 class BBandMixTimescale(GenericStrategy):
     def __init__(self):
@@ -45,10 +46,21 @@ def read_results():
     best_max_bal_index = 0
     best_end_bal = 0.0
     best_end_bal_index = 0
+    a = {
+         'buy_logic_mult': [],
+         'buy_logic_rsi_lim': [],
+         'sell_logic_mult': [],
+         'buy_order_duration': [],
+         'sell_order_duration': [],
+         'StopTrail %': [],
+         'max_value': [],
+         'final_value': [],
+         }
+    a_keys = [key for key in a]
+        
     with open('opt_log.txt', 'r', newline='\n') as opt_log:
         lei = csv.reader(opt_log, delimiter=',')
-        for leyo in lei:
-            # leyo = opt_log.readline()
+        for index, leyo in enumerate(lei):
             if not leyo:
                 break
             if float(leyo[6]) > best_max_bal:
@@ -59,8 +71,11 @@ def read_results():
                 best_end_bal = float(leyo[7])
                 best_end_bal_index = line_count
                 pass
+            for index_a, key in enumerate(a_keys):
+                a[key].append(float(leyo[index_a]))
             line_count += 1
     format_results([best_max_bal_index, best_end_bal_index])
+    plot_optimization_params(**a)
 
 
 def get_csv_line(path, line_number):
@@ -96,18 +111,22 @@ def format_results(best_indices):
         print(f'Initial Balance: {init_cash:.2f}, Max Balance: {float(best_line[index][6]):.2f}, End Balance: {float(best_line[index][7]):.2f}\n')
 
 
-def plot_results(self):
-    plt.bar('axes', labelsize=8)
+def plot_optimization_params(**params):  # param_names, *params, *final_values
+    keys_to_omit = ['max_value', 'final_value', 'buy_order_duration', 'sell_order_duration']# , 'buy_logic_rsi_lim', 'StopTrail %']
+    param_keys = [param if param not in keys_to_omit else None for param in params]
+    plt.rc('axes', labelsize=8)
     fig = plt.figure()
-
     ax1 = fig.add_subplot(111)
-    ax1.plot(self.plot_time, self.plot_bal)
-    ax1.title.set_text('Balance Over Time')
-    ax1.set_xlabel('Time')
-    ax1.set_ylabel('Money')
-
-
-    plt.xticks(rotation=90, ha='right')
+    for key in param_keys:
+        if key:
+            params[key] = np.array(params[key])
+            params[key] = preprocessing.normalize([params[key]])
+            ax1.scatter(params[key], params['final_value'], label=key)
+    plt.legend()
+    ax1.title.set_text('Balance vs Parameters')
+    ax1.set_xlabel('Param')
+    ax1.set_ylabel('Final Value')
+    # plt.xticks(rotation=90, ha='right')
     plt.show()
     pass
 
