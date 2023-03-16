@@ -64,16 +64,11 @@ class GenericStrategy(bt.Strategy):
 
     def buy_logic(self):
         ######### TODO: INSERT BUY CONDITIONS HERE ##########
-        if self.datas[1].low[0] <= self.buy_logic_multiplier*self.BBANDS20.lowerband and self.rsi12 < self.buy_logic_rsi_limit:
-            return True
-        return False
+        pass
 
     def sell_logic(self):
         ############# TODO: INSERT CONDITIONS HERE ##############
-        # think this works pretty well, leave for now #
-        if self.datas[0].high[0] >= self.sell_logic_multiplier*self.BBANDS20_5m.upperband:
-            return True
-        return False
+        pass
 
     def next(self):
 
