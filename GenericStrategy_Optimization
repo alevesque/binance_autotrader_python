@@ -61,11 +61,11 @@ def read_results():
     best_end_bal = 0.0
     best_end_bal_index = 0
     a = {
-         'buy_logic_mult': [],
-         'buy_logic_rsi_lim': [],
-         'sell_logic_mult': [],
-         'buy_order_duration': [],
-         'sell_order_duration': [],
+         'Buy Logic Multiplier': [],
+         'Buy Logic RSI Limit': [],
+         'Sell Logic Multiplier': [],
+         'Buy Order Duration': [],
+         'Sell Order Duration': [],
          'StopTrail %': [],
          'max_value': [],
          'final_value': [],
