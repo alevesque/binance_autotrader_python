@@ -1,3 +1,4 @@
+from __future__ import annotations
 from binance.exceptions import *
 import time
 import datetime, requests, asyncio, warnings, config
@@ -129,8 +130,13 @@ class BinanceTrader():
                        columns=['open_time', 'open', 'high', 'low', 'close', 'volume'],
                        dtype='float64')
             print('Initial data loaded - {}'.format(trading_pair['pair']))
-        
-    def process_raw_klines(self, new_data_raw):
+    
+    ##################################################################
+    # PROCESS RAW KLINES
+    # Appends relevant information to self.data and removes first entry
+    # to avoid overloading memory (only take what we need from past data)
+    ##################################################################
+    def process_raw_klines(self, new_data_raw: dict) -> None:
 
         # take only relevant data (OHLC, volume)
         new_data = {
@@ -174,16 +180,29 @@ class BinanceTrader():
                     max_trade_sell = float(filters['maxQty'])
         
         return min_position_buy, min_position_sell, max_trade_buy, max_trade_sell
-        
-    def buy_logic(self, indicators):
+     
+    ##################################################################
+    # BUY LOGIC
+    # Takes indicators and returns True/False if conditions are met or not
+    ##################################################################
+    def buy_logic(self, indicators: dict) -> bool:
         ######### TODO: INSERT BUY CONDITIONS HERE ##########
         return True
-
-    def sell_logic(self, indicators):
+    
+    ##################################################################
+    # SELL LOGIC
+    # Takes indicators and returns True/False if conditions are met or not
+    ##################################################################
+    def sell_logic(self, indicators: dict) -> bool:
         ############# TODO: INSERT CONDITIONS HERE ##############
         return True
 
-    def trading_strategy(self, trading_pair, indicators):
+    ##################################################################
+    # TRADING STRATEGY (archaic name, change to something more relevant)
+    # Determines if it's the right time, then sets up orders with
+    # appropriate parameters.
+    ##################################################################
+    def trading_strategy(self, trading_pair: list, indicators: dict) -> Order:
         #reset order info template - if no B/S order is warranted, the empty values will
         #notify other functions that there wasn't an order this tick
         # 2023 note: dont want to reset, because need to call api via check_order_status() with last orderId
@@ -324,7 +343,12 @@ class BinanceTrader():
     
         return
     
-    async def place_order(self, **order_parameters):
+    ##################################################################
+    # PLACE ORDER
+    # Formats order params for api, then calls api create_order() method.
+    # Returns server response as order_result.
+    ##################################################################
+    async def place_order(self, **order_parameters: dict) -> dict:
         # remove excess order params that will cause error if used with MARKET order
         # comment if statement when testing
         if order_parameters['type']=='MARKET':
@@ -383,7 +407,7 @@ class BinanceTrader():
         else:
             return conn_result
     
-    def order_stream_data_process(self, order_result_raw, datastream):
+    def order_stream_data_process(self, order_result_raw: dict, datastream: str) -> dict:
         order_result = {}
         if order_result_raw:    
             if datastream == 'Type1':
@@ -421,8 +445,13 @@ class BinanceTrader():
             order_result = order_result_raw
         self.order.order['status'] = order_result['status']
         return order_result
-
-    def indicator_data(self):
+    
+    ###################################################################
+    # INDICATOR DATA
+    # Calculates indicators from the latest self.data and returns the
+    # nth and (n-1)th indicators
+    ##################################################################
+    def indicator_data(self) -> dict:
         #calculate indicators
         RSI6 = abstract.RSI(self.data['close'].values,timeperiod=6)
         RSI50 = abstract.RSI(self.data['close'].values,timeperiod=50)
@@ -442,8 +471,12 @@ class BinanceTrader():
                             
                             }
         return indicators
-      
-    async def receive_stream(self, loop_active_bool):
+    
+     ##################################################################
+     # RECEIVE STREAM
+     # Receives latest kline from API
+     ##################################################################
+    async def receive_stream(self, loop_active_bool: bool) -> dict:
         # start receiving messages
         async with self.xlmusd_kline_5m as xlmusd_kline_5m_message:
             # while time not >20h, otherwise go back to beginning of first while loop to reset connection to avoid server-side disconnect
