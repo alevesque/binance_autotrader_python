@@ -10,21 +10,57 @@ import matplotlib.pyplot as plt
 
 class GenericStrategy(bt.Strategy):
 
-    COMMRATE = 0.001
+    COMM_RATE = 0.001
 
     def __init__(self):
 
         # update with whatever timescale you want to use as baseline
-        # must also update self.pos[''] in BUYING CONDITIONS
+        # must also update self.pos[] in BUYING CONDITIONS
         # and various indicators and buy/sell_logic() as needed
         self.main_data_scale = self.datas[0]
 
-        # self.rsi = bt.talib.RSI(self.datas[0], timeperiod=2)
-        # self.rsi6 = bt.talib.RSI(self.datas[0], timeperiod=6)
-        self.rsi12 = bt.talib.RSI(self.datas[1], timeperiod=12)
+        self.rsi12_15m = bt.talib.RSI(self.datas[1], timeperiod=12)
 
-        self.BBANDS20 = bt.talib.BBANDS(self.datas[1].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        self.BBANDS20_15m = bt.talib.BBANDS(self.datas[1].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         self.BBANDS20_5m = bt.talib.BBANDS(self.datas[0].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+
+        self.csv_logging_mode = ''
+        if 'i' in self.csv_logging_mode:
+            open('indic_log.txt', 'w').close()
+        if 'v' in self.csv_logging_mode:
+            open('value_log.txt', 'w').close()
+        if 't' in self.csv_logging_mode:
+            open('transaction_log.txt', 'w').close()
+
+        ####################
+        # indicators for logging for analysis, unrelated to backtest
+        ####################
+        # fucks up result if not included even though it isn't used (spooling time misses a few trades?)
+        self.EMA600 = bt.talib.EMA(self.datas[0].close, timeperiod=600)
+        '''
+        self.rsi = bt.talib.RSI(self.datas[0].close, timeperiod=2)
+        self.rsi6 = bt.talib.RSI(self.datas[0].close, timeperiod=6)
+        self.rsi_h = bt.talib.RSI(self.datas[1].close, timeperiod=2)
+        self.rsi6_h = bt.talib.RSI(self.datas[1].close, timeperiod=6)
+        self.rsi100 = bt.talib.RSI(self.datas[0].close, timeperiod=100)
+        self.rsi24_h = bt.talib.RSI(self.datas[1].close, timeperiod=24)
+        
+        self.macd = bt.talib.MACD(self.datas[0].close)
+        
+        self.SMA200 = bt.talib.SMA(self.datas[0].close, timeperiod=200)
+        self.SMA400 = bt.talib.SMA(self.datas[0].close, timeperiod=400)
+        self.SMA600 = bt.talib.SMA(self.datas[0].close, timeperiod=600)
+        self.SMA100 = bt.talib.SMA(self.datas[0].close, timeperiod=100)
+        self.SMA50 = bt.talib.SMA(self.datas[0].close, timeperiod=50)
+        self.SMA25 = bt.talib.SMA(self.datas[0].close, timeperiod=25)
+        self.SMA5 = bt.talib.SMA(self.datas[0].close, timeperiod=5)
+
+        self.EMA400 = bt.talib.EMA(self.datas[0].close, timeperiod=400)
+        self.EMA100 = bt.talib.EMA(self.datas[0].close, timeperiod=100)
+        self.EMA50 = bt.talib.EMA(self.datas[0].close, timeperiod=50)
+        self.EMA25 = bt.talib.EMA(self.datas[0].close, timeperiod=25)
+        '''
+        ####################
 
         self.initial_cash = 10000
         self.plot_time = []
@@ -49,131 +85,191 @@ class GenericStrategy(bt.Strategy):
         # Variables for optimization
         ##########
         self.quiet_mode = False
+        self.csv_logging_mode_active = False
         self.buy_logic_multiplier = 1.02
         self.buy_logic_rsi_limit = 25
         self.sell_logic_multiplier = 1.02
         self.buy_order_duration = 16
         self.sell_order_duration = 31
-        self.order_stop_trail_trailpercent = 0.0522
+        self.order_stop_trail_percent = 0.0522
 
-    def log(self, txt, dt=None):
-        #Logging function for this strategy
+    def log(self, txt):
+        # Logging function for this strategy
         if txt:
             dt = self.main_data_scale.datetime
             print('%s, %s, %s' % (dt.date(0).isoformat(), dt.time(), txt))
 
     def buy_logic(self):
-        ######### TODO: INSERT BUY CONDITIONS HERE ##########
-        pass
+        # TODO: INSERT BUY CONDITIONS HERE
+        return True
 
     def sell_logic(self):
-        ############# TODO: INSERT CONDITIONS HERE ##############
-        pass
+        # TODO: INSERT CONDITIONS HERE
+        return True
 
     def next(self):
 
         # if multiple data sources
         for i, d in enumerate(self.datas):
-            dt, dn = self.datetime.date(), d._name
+            # dt, dn = self.datetime.date(), d._name
             self.pos[d._name] = self.getposition(d).size
 
         close_price_5m = self.main_data_scale.close[0]
         data_15min = self.datas[1]
         close_price_15m = data_15min.close[0]
         # BUYING CONDITIONS
-        if not self.pos['5m']: #if multiple data sources
-            if not self.check_order_status(self.order_buy, self.order_stop_trail, self.order_sell_high):
+        if not self.pos['5m']:  # if multiple data sources
+            if not self._check_order_status(self.order_buy, self.order_stop_trail, self.order_sell_high):
                 if self.buy_logic():
                     buysize = float("{:.0f}".format(0.9*self.broker.get_cash()/close_price_15m))
                     buyprice = float("{:.4f}".format(close_price_15m))
                     self.order_buy = self.buy(
-                        data = self.main_data_scale,
-                        exectype = bt.Order.Limit,
-                        #trailpercent = 0.015,
-                        price = buyprice,
-                        size = buysize,
-                        valid=bt.date2num(data_15min.num2date())+(self.buy_order_duration/1440) # x min * (1h / 60m) * (1d / 24h) // x min to days
+                        data=self.main_data_scale,
+                        exectype=bt.Order.Limit,
+                        # trailpercent = 0.015,
+                        price=buyprice,
+                        size=buysize,
+                        # valid: x min * (1h / 60m) * (1d / 24h) // x min to days (1440 min in a day)
+                        valid=bt.date2num(data_15min.num2date())+(self.buy_order_duration/1440)
                     )
 
         # SELLING CONDITIONS
         if self.position.size > 0:
-            if not self.check_order_status(self.order_stop_trail, self.order_sell_high):
+            if not self._check_order_status(self.order_stop_trail, self.order_sell_high):
                 self.order_stop_trail = self.sell(
-                    data = self.main_data_scale,
-                    exectype = bt.Order.StopTrail,
-                    trailpercent = self.order_stop_trail_trailpercent,
-                    price = close_price_5m,
-                    size = self.pos['5m'],
-                    info = {'sellcode': 3},
+                    data=self.main_data_scale,
+                    exectype=bt.Order.StopTrail,
+                    trailpercent=self.order_stop_trail_percent,
+                    price=close_price_5m,
+                    size=self.pos['5m'],
                     # valid=bt.date2num(self.main_data_scale.num2date())+(12240/1440)
                 )
 
-            elif not self.check_order_status(self.order_sell_high):
-                # if trailstop order still open but indicator says sell / price is high then cancel trailstop and sell
+            elif not self._check_order_status(self.order_sell_high):
+                # if StopTrail order still open but indicator says sell / price is high then cancel StopTrail and sell
                 if self.sell_logic():
                     self.order_sell_high = self.sell(
-                        data = self.main_data_scale,
-                        exectype = bt.Order.Limit,
+                        data=self.main_data_scale,
+                        exectype=bt.Order.Limit,
                         # trailpercent = 0.01,
-                        price = close_price_15m,
-                        size = self.pos['5m'],
-                        info = {'sellcode': 1},
-                        valid = bt.date2num(self.main_data_scale.num2date())+(self.sell_order_duration/1440)
+                        price=close_price_15m,
+                        size=self.pos['5m'],
+                        valid=bt.date2num(self.main_data_scale.num2date())+(self.sell_order_duration/1440)
                     )
                     self.cancel(self.order_stop_trail)
 
         return
 
-    def sellcount(self, order_name_sellcount, order_type_sellcount, net_gain_sellcount, net_gain_percent_sellcount):
-        sell_key = order_name_sellcount + order_type_sellcount
+    def sell_count(self, order_name_sell_count, order_type_sell_count, net_gain_sell_count, net_gain_percent_sell_count):
+        sell_key = order_name_sell_count + order_type_sell_count
         # Count of that action
         self.sell_cond_count[sell_key][0] += 1
         # Accumulated profit per action (divide by count later to get avg)
-        self.sell_cond_count[sell_key][1] += net_gain_sellcount
+        self.sell_cond_count[sell_key][1] += net_gain_sell_count
         # Accumulated profit percent per action (divide by count later to get avg)
-        self.sell_cond_count[sell_key][2] += net_gain_percent_sellcount
+        self.sell_cond_count[sell_key][2] += net_gain_percent_sell_count
         return
 
     def log_data(self, order):
         order_name = order.getordername()
         if order.isbuy():
             order_type = 'Buy'
-            net_gain = 0
-            net_gain_percent = 0
-            order_value = order.executed.value
         else:
             order_type = 'Sell'
-        output = ('')
-        if not self.check_order_status(order):
+        output = ''
+        if not self._check_order_status(order):
             output = (f"Order: {order.ref:3d} Type: {order_name:<9} {order_type:<4} Status:" +
                       f" {order.getstatusname():1} ".ljust(12) +
                       f"Size: ".ljust(6) +
-                      f"{order.created.size:6.0f} ".rjust(8)+
+                      f"{order.created.size:6.0f} ".rjust(8) +
                       f"Price: {order.executed.price:6.4f} ")
 
         if order.status in [order.Completed]:
             order_value = abs(order.executed.price*order.executed.size)
             # order.executed.value is buy cost of original position
-            net_gain = order_value-order.executed.value*(1+GenericStrategy.COMMRATE) - order.executed.comm
+            net_gain = order_value-order.executed.value*(1+GenericStrategy.COMM_RATE) - order.executed.comm
             if order.executed.value != 0:
                 net_gain_percent = 100*net_gain/order.executed.value
             else:
                 net_gain_percent = None
-            output += ( f"Value: {order_value:6.2f} " +
-                        f"Comm: {order.executed.comm:4.2f} "
-                        # + f"RSI: {float(self.rsi[0]):3.2f} "
-                        )
+            output += (f"Value: {order_value:6.2f} " +
+                       f"Comm: {order.executed.comm:4.2f} "
+                       # + f"RSI: {float(self.rsi[0]):3.2f} "
+                       )
             if not order.isbuy():
-                output += ( f"net gain: {net_gain:4.2f} | " +
-                            f"{net_gain_percent:3.2f}% "
-                            )
+                output += (f"net gain: {net_gain:4.2f} | " +
+                           f"{net_gain_percent:3.2f}% "
+                           )
                 self.plot_time.append(self.main_data_scale.datetime.date(0).isoformat())
                 self.plot_bal.append(order.executed.value)
-            self.sellcount(order_name, order_type, net_gain, net_gain_percent)
+            self.sell_count(order_name, order_type, net_gain, net_gain_percent)
+            if self.csv_logging_mode:
+                self._logging_for_analysis(order_name, order_type, order_value, order, net_gain, net_gain_percent)
         self.log(output)
         return
 
-    def check_order_status(self, *args):
+    def _logging_for_analysis(self, order_name, order_type, order_value, order, net_gain, net_gain_percent):
+        # log time for analysis
+        dt = self.main_data_scale.datetime.date(0)
+        if 'i' in self.csv_logging_mode:
+            # log indicators for analysis
+            indic_to_log = {
+                'time': dt,
+                'rsi2_5m': self.rsi[0],
+                'rsi6_5m': self.rsi6[0],
+                'rsi12_15m': self.rsi12_15m[0],
+                'bbands20u_15m': self.BBANDS20_15m.upperband[0],
+                'bbands20m_15m': self.BBANDS20_15m.middleband[0],
+                'bbands20l_15m': self.BBANDS20_15m.lowerband[0],
+                'bbands20u_5m': self.BBANDS20_5m.upperband[0],
+                'bbands20m_5m': self.BBANDS20_5m.middleband[0],
+                'bbands20l_5m': self.BBANDS20_5m.lowerband[0],
+                'rsi2_15m': self.rsi_h[0],
+                'rsi6_15m': self.rsi6_h[0],
+                'rsi100_5m': self.rsi100[0],
+                'rsi24_15m':  self.rsi24_h[0],
+                'macd_5m': self.macd[0],
+                'sma200_5m': self.SMA200[0],
+                'sma400_5m': self.SMA400[0],
+                'sma600_5m': self.SMA600[0],
+                'sma100_5m': self.SMA100[0],
+                'sma50_5m': self.SMA50[0],
+                'sma25_5m': self.SMA25[0],
+                'sma5_5m': self.SMA5[0],
+                'ema600_5m': self.EMA600[0],
+                'ema400_5m': self.EMA400[0],
+                'ema100_5m': self.EMA100[0],
+                'ema50_5m': self.EMA50[0],
+                'ema25_5m': self.EMA25[0],
+            }
+            # output to csv file
+            self._log_csv('indic_log.txt', **indic_to_log)
+        # log strategy outcomes for analysis
+        if 't' in self.csv_logging_mode:
+            strategy_exec_to_log = {
+                'time': dt,
+                'o_name': order_name,
+                'o_type': order_type,
+                'o_size': order.created.size,
+                'o_price': order.executed.price,
+                'o_value': order_value,
+                'o_comm': order.executed.comm,
+                'gain_per_unit': net_gain/abs(order.created.size),
+                'gain_percent': net_gain_percent
+            }
+            self._log_csv('transaction_log.txt', **strategy_exec_to_log)
+        return None
+
+    @staticmethod
+    def _log_csv(log_file: str, **line_to_log: dict) -> None:
+        with open(log_file, 'a', newline='\n') as file_to_log:
+            for result in line_to_log:
+                file_to_log.write(str(line_to_log[result])+',')
+            file_to_log.write('\n')
+        pass
+
+    @staticmethod
+    def _check_order_status(*args) -> bool:
         orders = (item for item in args if item is not None)
         if orders:
             return any([True if order.alive() else False for order in orders])
@@ -193,19 +289,13 @@ class GenericStrategy(bt.Strategy):
     def plot_results(self):
         plt.rc('axes', labelsize=8)
         fig = plt.figure()
-
         # change subplot(x) to 121 if adding subplot
-        # first num is total rows, second is total columns, third is which location to put that named plot (i think)
+        # first num is total rows, second is total columns, third is which location to put that named plot (I think)
         ax1 = fig.add_subplot(111)
         ax1.plot(self.plot_time, self.plot_bal)
         ax1.title.set_text('Balance Over Time')
         ax1.set_xlabel('Time')
         ax1.set_ylabel('Money')
-
-        #ax2 = fig.add_subplot(122)
-        #ax2.plot(self.indicator_plot_time, self.indicator_plot_ema400)
-        #ax2.title.set_text('Indicators')
-
         plt.xticks(rotation=90, ha='right')
         plt.show()
         pass
@@ -221,25 +311,37 @@ class GenericStrategy(bt.Strategy):
                 else:
                     avg_profit = 0
                     avg_profit_percent = 0
-                print(f'\t{key:<13}\t{self.sell_cond_count[key][0]:5.0f}\t{avg_profit:10.2f}\t{avg_profit_percent:12.2f}%')
-            print(f'Initial Balance: {self.initial_cash:.2f}, Max Balance: {self.prev_max_balance:.2f}, End Balance: {self.current_balance:.2f}')
+                print(f'\t{key:<13}' +
+                      f'\t{self.sell_cond_count[key][0]:5.0f}' +
+                      f'\t{avg_profit:10.2f}' +
+                      f'\t{avg_profit_percent:12.2f}%'
+                      )
+            print(f'Initial Balance: {self.initial_cash:.2f}, ' +
+                  f'Max Balance: {self.prev_max_balance:.2f}, ' +
+                  f'End Balance: {self.current_balance:.2f}')
             self.plot_results()
-        log_vars = (self.buy_logic_multiplier,
-                    self.buy_logic_rsi_limit,
-                    self.sell_logic_multiplier,
-                    self.buy_order_duration,
-                    self.sell_order_duration,
-                    self.order_stop_trail_trailpercent,
-                    self.prev_max_balance,
-                    self.current_balance,
-                    self.sell_cond_count
-                    )
-        sep = ','
-        log_line = sep.join([f"\"{str(log_var)}\"" for log_var in log_vars])
-        log_line += '\n'
 
-        with open('opt_log.txt', 'a', newline='\n') as opt_log:
-            opt_log.write(log_line)
+        if 'o' in self.csv_logging_mode:
+            # log optimization settings
+            log_vars = (self.buy_logic_multiplier,
+                        self.buy_logic_rsi_limit,
+                        self.sell_logic_multiplier,
+                        self.buy_order_duration,
+                        self.sell_order_duration,
+                        self.order_stop_trail_percent,
+                        self.prev_max_balance,
+                        self.current_balance,
+                        self.sell_cond_count
+                        )
+            sep = ','
+            log_line = sep.join([f"\"{str(log_var)}\"" for log_var in log_vars])
+            log_line += '\n'
+            with open('opt_log.txt', 'a', newline='\n') as opt_log:
+                opt_log.write(log_line)
+
+        if 'v' in self.csv_logging_mode:
+            # log order executed values
+            with open('value_log.txt', 'a', newline='\n') as value_log:
+                for (t, b) in zip(self.plot_time, self.plot_bal):
+                    value_log.write(f"{t},{b}\n")
         pass
-
-
