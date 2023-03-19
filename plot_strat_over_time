@@ -3,16 +3,17 @@ import copy
 import matplotlib.pyplot as plt
 import csv
 
-
 '''
 plot_strat_over_time - plots various metrics to help analyse a given logged strategy
 
-
-does incredibly during 2020, 2021 then faceplants in 2022 - if had started it during 2022 would have lost a ton of principal
-    [x] Plot freq of stoptrail/sell trades per month on bar plot to see if theres a period its buying more
-    [x] Plot value of stoptrail/sell trades per month on bar plot to see if theres a period it's losing more
-    [x] Plot potential indicators over time to see which ones line up with the bad market - overlay on all plots to see correlation
-    loses most money in 2022, see if theres an indicator that says the market is shitty like that - 1h EMA400 > 1.XX*EMA600?
+does incredibly during 2020, 2021 then faceplants in 2022
+    - if had started it during 2022 would have lost a ton of principal
+[x] Plot freq of TrailStop/sell trades per month on bar plot to see if theres a period its buying more
+[x] Plot value of TrailStop/sell trades per month on bar plot to see if theres a period it's losing more
+[x] Plot potential indicators over time to see which ones line up with the bad market 
+    - overlay on all plots to see correlation
+loses most money in 2022, see if theres an indicator that says the market is shitty like that
+    - 1h EMA400 > 1.XX*EMA600?
 '''
 
 
@@ -28,23 +29,32 @@ does incredibly during 2020, 2021 then faceplants in 2022 - if had started it du
 def _get_data_for_plot_transaction_freq_and_balance() -> tuple[dict, dict, list]:
     # initialize multilayer dicts
     years_list = [2020, 2021, 2022]
+    # mos_vals is list of months as int used as keys for each year i.e. [1, 2, 3, ...]
     mos_vals = [i+1 for i in range(12)]
-    years_init = {key: value for (key, value) in zip(mos_vals, [[0, 0] for j in range(12)])}
-    yearly_transactions = {k: v for (k, v) in zip(years_list, [copy.deepcopy(years_init) for k in range(len(years_list))])}
+    # year_init is dict for each year using mos_vals as keys and [0, 0] as values
+    # i.e. {1: [0, 0], 2: [0, 0], ...}
+    year_init = {key: value for (key, value) in zip(mos_vals, [[0, 0] for _ in range(12)])}
+    # yearly_transactions is dict for all years in years_list using the format of year_init as sub-dicts
+    # i.e. {2020: {1: [0, 0], 2: [0, 0], ...}, 2021: {1: [0, 0], 2: [0, 0], ...}, ...}
+    yearly_transactions = {k: v for (k, v) in
+                           zip(years_list,
+                               [copy.deepcopy(year_init) for _ in range(len(years_list))]
+                               )
+                           }
     plot_bal = copy.deepcopy(yearly_transactions)
 
     with open('transaction_log.txt', 'r', newline='\n') as transact_log:
-        lei = csv.reader(transact_log, delimiter=',')
-        for leyo in lei:
-            if not leyo:
+        lines = csv.reader(transact_log, delimiter=',')
+        for line in lines:
+            if not line:
                 break
 
-            transaction_year = int(datetime.datetime.strptime(leyo[0], '%Y-%m-%d').year)
-            transaction_month = int(datetime.datetime.strptime(leyo[0], '%Y-%m-%d').month)
+            transaction_year = int(datetime.datetime.strptime(line[0], '%Y-%m-%d').year)
+            transaction_month = int(datetime.datetime.strptime(line[0], '%Y-%m-%d').month)
             yearly_transactions[transaction_year][transaction_month][0] += 1
-            if leyo[7] != 'None':
-                yearly_transactions[transaction_year][transaction_month][1] += float(leyo[7])
-                plot_bal[transaction_year][transaction_month][1] += float(leyo[7])*abs(float(leyo[3]))
+            if line[7] != 'None':
+                yearly_transactions[transaction_year][transaction_month][1] += float(line[7])
+                plot_bal[transaction_year][transaction_month][1] += float(line[7])*abs(float(line[3]))
             plot_bal[transaction_year][transaction_month][0] = datetime.date(transaction_year, transaction_month, 28)
     return yearly_transactions, plot_bal, years_list
 
@@ -56,18 +66,23 @@ def _get_data_for_plot_transaction_freq_and_balance() -> tuple[dict, dict, list]
 #   - [trade count, profit per trade per share] per month per year
 #   - net gain per month over all years
 ###
-def plot_results(yearly_transactions: dict, plot_bal: dict, years_list: list) -> None:
+def plot_results() -> None:
+    yearly_transactions, plot_bal, years_list = _get_data_for_plot_transaction_freq_and_balance()
     fig = plt.figure()
     trades_per_month = dict()
     for transaction_year in years_list:
-        trades_per_month[transaction_year] = [[yearly_transactions[transaction_year][y][0],
-                                               yearly_transactions[transaction_year][y][1]/yearly_transactions[transaction_year][y][0]] for y in yearly_transactions[transaction_year]]
+        trades_per_month[transaction_year] = [
+            [yearly_transactions[transaction_year][y][0],
+             (yearly_transactions[transaction_year][y][1] / yearly_transactions[transaction_year][y][0])
+             ]
+            for y in yearly_transactions[transaction_year]
+        ]
 
     months = [x for x in yearly_transactions[years_list[0]]]
     col_count = len(years_list)
-    row_count = len(yearly_transactions[transaction_year][1])
+    row_count = len(yearly_transactions[years_list[0]][1])
     pos_count = 0
-    ax = [0 for i in range(row_count*col_count)]
+    ax = [plt.Figure for _ in range(row_count*col_count)]
     for j in range(row_count):
         for i in range(col_count):
             plot_id = int(f"{row_count}{col_count}{pos_count+1}")
@@ -83,7 +98,7 @@ def plot_results(yearly_transactions: dict, plot_bal: dict, years_list: list) ->
 
     fig2 = plt.figure()
     # change subplot(x) to 121 if adding subplot
-    # first num is total rows, second is total columns, third is which location to put that named plot (i think)
+    # first num is total rows, second is total columns, third is which location to put that named plot
     ax1 = fig2.add_subplot(111)
     q = [plot_bal[plot_bal_year][mon] for plot_bal_year in plot_bal for mon in plot_bal[plot_bal_year]]
     ax1.bar([i+1 for i in range(len(q))], [mon[1] for mon in q])
@@ -114,15 +129,15 @@ def _indic_csv_read(indics_to_plot: list) -> list[list]:
 
 ###
 # _value_csv_read()
-# reads list of values of executed orders from price_log.txt that was logged in backtest strategy
+# reads list of values of executed orders from value_log.txt that was logged in backtest strategy
 # returns list of [timestamp, value of order in USD]
 ###
 def _value_csv_read() -> list[list]:
-    with open('price_log.txt', 'r', newline='\n') as price_log:
-        lines_price = csv.reader(price_log, delimiter=',')
-        time_value = [[] for _ in lines_price]
-        price_log.seek(0)
-        for i, line2 in enumerate(lines_price):
+    with open('value_log.txt', 'r', newline='\n') as value_log:
+        lines_value = csv.reader(value_log, delimiter=',')
+        time_value = [[] for _ in lines_value]
+        value_log.seek(0)
+        for i, line2 in enumerate(lines_value):
             time_value[i].append(datetime.datetime.strptime(line2[0], '%Y-%m-%d'))
             time_value[i].append(float(line2[1]))
     return time_value
@@ -135,13 +150,15 @@ def _value_csv_read() -> list[list]:
 #   - indicators over all years
 #   - order values over all years
 ###
-def plot_indics(d_t: list, t_v: list, label_indic: list) -> None:
+def plot_indics(index_indic, label_indic) -> None:
+    time_indics = _indic_csv_read(index_indic)
+    time_value = _value_csv_read()
     fig2 = plt.figure()
     ax = fig2.add_subplot(111)
     color_indic = ['b-', 'g-']
-    for sub_indic in range(len(d_t[0])-1):
-        ax.plot([item_[0] for item_ in d_t],
-                [item_[sub_indic+1] for item_ in d_t],
+    for sub_indic in range(len(time_indics[0])-1):
+        ax.plot([item_[0] for item_ in time_indics],
+                [item_[sub_indic+1] for item_ in time_indics],
                 color_indic[sub_indic],
                 label=label_indic[sub_indic]
                 )
@@ -149,26 +166,24 @@ def plot_indics(d_t: list, t_v: list, label_indic: list) -> None:
     ax.set_ylabel('Indicator', color='g')
 
     ax2 = ax.twinx()
-    ax2.plot([item_[0] for item_ in t_v], [item_[1] for item_ in t_v], 'r-', label='Order Value')
+    ax2.plot([item_[0] for item_ in time_value], [item_[1] for item_ in time_value], 'r-', label='Order Value')
     ax2.set_ylabel('Order Executed Value', color='r')
     for tl in ax2.get_yticklabels():
         tl.set_color('r')
 
     fig2.legend()
     plt.show()
+
     return None
 
 
 # comment out if you don't want to show these
-yearly_transactions, plot_bal, years_list = _get_data_for_plot_transaction_freq_and_balance()
-plot_results(yearly_transactions, plot_bal, years_list)
+plot_results()
 
-time_value = _value_csv_read()
 # pick which indicator indexes you want to plot and their names (see below dict to find csv file index)
 indic_index = [22, 23]
 indic_label = ['EMA600', 'EMA400']
-time_indics = _indic_csv_read(indic_index)
-plot_indics(time_indics, time_value, indic_label)
+plot_indics(indic_index, indic_label)
 
 '''
 # FOR REFERENCE FOR indic_index:
