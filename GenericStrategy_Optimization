@@ -2,156 +2,157 @@ import ast
 import backtrader as bt
 import datetime
 from backtest_generic import GenericStrategy
-import matplotlib.pyplot as plt
 import csv
 import itertools
-from sklearn import preprocessing
-import numpy as np
 
 init_cash = 10000
-fromdate = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
-todate = datetime.datetime.strptime('2023-01-01', '%Y-%m-%d')
-# todate = datetime.datetime.strptime('2020-01-10', '%Y-%m-%d')
-data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
-data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
-#data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60, timeframe=bt.TimeFrame.Minutes, fromdate=fromdate, todate=todate)
+from_date = datetime.datetime.strptime('2020-01-01', '%Y-%m-%d')
+to_date = datetime.datetime.strptime('2023-01-01', '%Y-%m-%d')
+# to_date = datetime.datetime.strptime('2020-01-10', '%Y-%m-%d')
+data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, compression=5,
+                                  timeframe=bt.TimeFrame.Minutes, fromdate=from_date, todate=to_date)
+data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15,
+                                   timeframe=bt.TimeFrame.Minutes, fromdate=from_date, todate=to_date)
+# data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60,
+#                                   timeframe=bt.TimeFrame.Minutes, fromdate=from_date, todate=to_date)
 
 # come up with values
-buy_logic_multiplier = [102]  # range(95, 120, 5)
-buy_logic_rsi_limit = [25]  # range(15, 40, 5)
-sell_logic_multiplier = [102]  # range(95, 120, 5)
-buy_order_duration = [16]
-sell_order_duration = [31]
-order_stop_trail_trailpercent = [5.22]#range(1, 8, 1)# [0.0522]
+# graph results (one input at a time vs $) to visualize relationship (linear, etc.)
+# also look at actual charts of recent timescales to visualize how effective \
+# the buy/sell logic is capturing the points we want
+buy_logic_multiplier = [1.03]  # range(1020, 1041, 1) # 1.03 best so far
+buy_logic_rsi_limit = [34.9]  # range(250, 360, 1) # change below to /10 #[35]  # 34.9, 35.5 best so far
+sell_logic_multiplier = [1.025]  # range(1020, 1041, 1) # 1.025 best so far
+buy_order_duration = [10]
+sell_order_duration = [20]
+order_stop_trail_percent = [0.073]  # range(725, 735, 1) # remember to change /100 to /1000 below
+
+'''
+BEST SO FAR, optimize further based on this
+    [x] Plot freq of StopTrail/Sell trades per month on bar plot to see if theres a period its buying more
+    [x] Plot value of StopTrail/Sell trades per month on bar plot to see if theres a period it's losing more
+    Plot potential indicators over time to see which ones line up with the bad market
+    loses most money in 2022, see if theres an indicator that says the market is shitty like that
+     - 1h EMA400 > 1.XX*EMA600?
+    
+
+------------------------------
+    Parameters:
+    Buy Logic Mult:    	1.0300
+    Buy Logic RSI Lim: 	34.9000
+    Sell Logic Mult:   	1.0250
+    Buy Order Duration: 	10  
+    Sell Order Duration: 	20  
+    StopTrail %:       	0.0730
+    
+    Type         	Count	Avg Profit	 Avg Profit %
+    LimitBuy     	  546	   -418.03	       -0.20%
+    LimitSell    	   44	  20244.41	       14.24%
+    MarketBuy    	    0	      0.00	        0.00%
+    MarketSell   	    0	      0.00	        0.00%
+    StopTrailBuy 	    0	      0.00	        0.00%
+    StopTrailSell	  501	  -1530.15	       -0.34%
+Initial Balance: 10000.00, Max Balance: 676422.94, End Balance: 134146.78
+'''
+
 
 class BBandMixTimescale(GenericStrategy):
-    
-    def __init__(self):
+
+    def __init__(self) -> None:
         super().__init__()
         self.initial_cash = init_cash
         ##########
         # Variables for optimization
         ##########
-        self.quiet_mode = True
-        self.buy_logic_multiplier = buy_logic_multiplier[a]/100
+        self.quiet_mode = False
+        self.csv_logging_mode = ''
+        self.buy_logic_multiplier = buy_logic_multiplier[a]
         self.buy_logic_rsi_limit = buy_logic_rsi_limit[b]
-        self.sell_logic_multiplier = sell_logic_multiplier[c]/100
+        self.sell_logic_multiplier = sell_logic_multiplier[c]
         self.buy_order_duration = buy_order_duration[d]
         self.sell_order_duration = sell_order_duration[e]
-        self.order_stop_trail_trailpercent = order_stop_trail_trailpercent[f]/100
-    
-    def buy_logic(self):
-        ######### TODO: INSERT BUY CONDITIONS HERE ##########
-        if self.datas[1].low[0] <= self.buy_logic_multiplier*self.BBANDS20.lowerband and self.rsi12 < self.buy_logic_rsi_limit:
+        self.order_stop_trail_percent = order_stop_trail_percent[f]
+
+    def buy_logic(self) -> bool:
+        # TODO: INSERT BUY CONDITIONS HERE
+        if self.datas[1].low[0] <= self.buy_logic_multiplier*self.BBANDS20_15m.lowerband and self.rsi12_15m < self.buy_logic_rsi_limit:
             return True
         return False
 
-    def sell_logic(self):
-        ############# TODO: INSERT CONDITIONS HERE ##############
+    def sell_logic(self) -> bool:
+        # TODO: INSERT CONDITIONS HERE
         # think this works pretty well, leave for now #
         if self.datas[0].high[0] >= self.sell_logic_multiplier*self.BBANDS20_5m.upperband:
             return True
         return False
 
 
-def read_results():
+def read_results() -> None:
     line_count = 0
     best_max_bal = 0.0
     best_max_bal_index = 0
     best_end_bal = 0.0
     best_end_bal_index = 0
-    a = {
-         'Buy Logic Multiplier': [],
-         'Buy Logic RSI Limit': [],
-         'Sell Logic Multiplier': [],
-         'Buy Order Duration': [],
-         'Sell Order Duration': [],
-         'StopTrail %': [],
-         'max_value': [],
-         'final_value': [],
-         }
-    a_keys = [key for key in a]
-        
     with open('opt_log.txt', 'r', newline='\n') as opt_log:
-        lei = csv.reader(opt_log, delimiter=',')
-        for index, leyo in enumerate(lei):
-            if not leyo:
+        lines = csv.reader(opt_log, delimiter=',')
+        for line in lines:
+            if not line:
                 break
-            if float(leyo[6]) > best_max_bal:
-                best_max_bal = float(leyo[6])
+            if float(line[6]) > best_max_bal:
+                best_max_bal = float(line[6])
                 best_max_bal_index = line_count
                 pass
-            if float(leyo[7]) > best_end_bal:
-                best_end_bal = float(leyo[7])
+            if float(line[7]) > best_end_bal:
+                best_end_bal = float(line[7])
                 best_end_bal_index = line_count
                 pass
-            for index_a, key in enumerate(a_keys):
-                a[key].append(float(leyo[index_a]))
             line_count += 1
-    format_results([best_max_bal_index, best_end_bal_index])
-    plot_optimization_params(**a)
+    _format_results([best_max_bal_index, best_end_bal_index])
 
 
-def get_csv_line(path, line_number):
+def _get_csv_line(path: str, line_number: int) -> list:
     with open(path) as csv_f:
         return next(itertools.islice(csv.reader(csv_f), line_number, None))
 
 
-def format_results(best_indices):
+def _format_results(best_indices: list[int]) -> None:
     best_line = []
-    log_var_count = range(6)
-    print('#'*30)
+    print('#' * 30)
     print('# Optimization Summary:')
-    print('#'*30)
+    print('#' * 30)
     for index, value in enumerate(best_indices):
-        best_line.append(get_csv_line('opt_log.txt', value))
+        best_line.append(_get_csv_line('opt_log.txt', value))
         print('-' * 30 + '\n\tParameters:')
-        print(f"\t{'Buy Logic Mult: ':<19}\t{best_line[index][0]:>6}\n" +
-              f"\t{'Buy Logic RSI Lim: ':<19}\t{best_line[index][1]:>6}\n" +
-              f"\t{'Sell Logic Mult: ':<19}\t{best_line[index][2]:>6}\n" +
-              f"\t{'Buy Order Duration: ':<19}\t{best_line[index][3]:<6}\n" +
-              f"\t{'Sell Order Duration: ':<19}\t{best_line[index][4]:<6}\n" +
-              f"\t{'StopTrail %: ':<19}\t{best_line[index][5]:<6}\n")
+        print(f"\t{'Buy Logic Mult: ':<19}\t{float(best_line[index][0]):6.4f}\n" +
+              f"\t{'Buy Logic RSI Lim: ':<19}\t{float(best_line[index][1]):6.4f}\n" +
+              f"\t{'Sell Logic Mult: ':<19}\t{float(best_line[index][2]):6.4f}\n" +
+              f"\t{'Buy Order Duration: ':<19}\t{int(best_line[index][3]):<4.0f}\n" +
+              f"\t{'Sell Order Duration: ':<19}\t{int(best_line[index][4]):<4.0f}\n" +
+              f"\t{'StopTrail %: ':<19}\t{float(best_line[index][5]):<6.4f}\n")
         print(f"\t{'Type':<13}\t{'Count':<5}\t{'Avg Profit':<10}\t {'Avg Profit %':<12}")
         sell_cond_count = ast.literal_eval(best_line[index][8])
         for key in sell_cond_count:
             if sell_cond_count[key][0]:
-                avg_profit = sell_cond_count[key][1]/sell_cond_count[key][0]
-                avg_profit_percent = sell_cond_count[key][2]/sell_cond_count[key][0]
+                avg_profit = sell_cond_count[key][1] / sell_cond_count[key][0]
+                avg_profit_percent = sell_cond_count[key][2] / sell_cond_count[key][0]
             else:
                 avg_profit = 0
                 avg_profit_percent = 0
             print(f'\t{key:<13}\t{sell_cond_count[key][0]:5.0f}\t{avg_profit:10.2f}\t{avg_profit_percent:12.2f}%')
-        print(f'Initial Balance: {init_cash:.2f}, Max Balance: {float(best_line[index][6]):.2f}, End Balance: {float(best_line[index][7]):.2f}\n')
+        print(
+            f'Initial Balance: {init_cash:.2f},'
+            f' Max Balance: {float(best_line[index][6]):.2f},'
+            f' End Balance: {float(best_line[index][7]):.2f}\n'
+        )
 
 
-def plot_optimization_params(**params):  # param_names, *params, *final_values
-    keys_to_omit = ['max_value', 'final_value', 'buy_order_duration', 'sell_order_duration']# , 'buy_logic_rsi_lim', 'StopTrail %']
-    param_keys = [param if param not in keys_to_omit else None for param in params]
-    plt.rc('axes', labelsize=8)
-    fig = plt.figure()
-    ax1 = fig.add_subplot(111)
-    for key in param_keys:
-        if key:
-            params[key] = np.array(params[key])
-            params[key] = preprocessing.normalize([params[key]])
-            ax1.scatter(params[key], params['final_value'], label=key)
-    plt.legend()
-    ax1.title.set_text('Balance vs Parameters')
-    ax1.set_xlabel('Param')
-    ax1.set_ylabel('Final Value')
-    # plt.xticks(rotation=90, ha='right')
-    plt.show()
-    pass
-
-
-def init_cerebro():
+def init_cerebro() -> None:
     cerebro = bt.Cerebro()
     cerebro.adddata(data_5m, name='5m')
     cerebro.adddata(data_15m, name='15m')
-    #cerebro.adddata(data_1h, name='1h')
+    # cerebro.adddata(data_1h, name='1h')
     cerebro.broker.set_cash(init_cash)
-    cerebro.broker.setcommission(commission=GenericStrategy.COMMRATE)
+    cerebro.broker.setcommission(commission=GenericStrategy.COMM_RATE)
     cerebro.addstrategy(BBandMixTimescale)
     cerebro.run()
 
@@ -161,6 +162,6 @@ for a, _ in enumerate(buy_logic_multiplier):
         for c, _ in enumerate(sell_logic_multiplier):
             for d, _ in enumerate(buy_order_duration):
                 for e, _ in enumerate(sell_order_duration):
-                    for f, _ in enumerate(order_stop_trail_trailpercent):
+                    for f, _ in enumerate(order_stop_trail_percent):
                         init_cerebro()
 read_results()
