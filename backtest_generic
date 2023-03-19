@@ -93,25 +93,23 @@ class GenericStrategy(bt.Strategy):
         self.sell_order_duration = 31
         self.order_stop_trail_percent = 0.0522
 
-    def log(self, txt):
+    def log(self, txt: str) -> None:
         # Logging function for this strategy
         if txt:
             dt = self.main_data_scale.datetime
             print('%s, %s, %s' % (dt.date(0).isoformat(), dt.time(), txt))
 
-    def buy_logic(self):
+    def buy_logic(self) -> bool:
         # TODO: INSERT BUY CONDITIONS HERE
         return True
 
-    def sell_logic(self):
+    def sell_logic(self) -> bool:
         # TODO: INSERT CONDITIONS HERE
         return True
 
-    def next(self):
-
+    def next(self) -> None:
         # if multiple data sources
         for i, d in enumerate(self.datas):
-            # dt, dn = self.datetime.date(), d._name
             self.pos[d._name] = self.getposition(d).size
 
         close_price_5m = self.main_data_scale.close[0]
@@ -160,7 +158,13 @@ class GenericStrategy(bt.Strategy):
 
         return
 
-    def sell_count(self, order_name_sell_count, order_type_sell_count, net_gain_sell_count, net_gain_percent_sell_count):
+    def sell_count(
+            self,
+            order_name_sell_count: str,
+            order_type_sell_count: str,
+            net_gain_sell_count: float,
+            net_gain_percent_sell_count: float,
+    ) -> None:
         sell_key = order_name_sell_count + order_type_sell_count
         # Count of that action
         self.sell_cond_count[sell_key][0] += 1
@@ -170,7 +174,7 @@ class GenericStrategy(bt.Strategy):
         self.sell_cond_count[sell_key][2] += net_gain_percent_sell_count
         return
 
-    def log_data(self, order):
+    def log_data(self, order: bt.Order) -> None:
         order_name = order.getordername()
         if order.isbuy():
             order_type = 'Buy'
@@ -208,7 +212,15 @@ class GenericStrategy(bt.Strategy):
         self.log(output)
         return
 
-    def _logging_for_analysis(self, order_name, order_type, order_value, order, net_gain, net_gain_percent):
+    def _logging_for_analysis(
+            self,
+            order_name: str,
+            order_type: str,
+            order_value: float,
+            order: bt.Order,
+            net_gain: float,
+            net_gain_percent: float
+    ) -> None:
         # log time for analysis
         dt = self.main_data_scale.datetime.date(0)
         if 'i' in self.csv_logging_mode:
@@ -258,7 +270,7 @@ class GenericStrategy(bt.Strategy):
                 'gain_percent': net_gain_percent
             }
             self._log_csv('transaction_log.txt', **strategy_exec_to_log)
-        return None
+        pass
 
     @staticmethod
     def _log_csv(log_file: str, **line_to_log: dict) -> None:
@@ -269,13 +281,13 @@ class GenericStrategy(bt.Strategy):
         pass
 
     @staticmethod
-    def _check_order_status(*args) -> bool:
+    def _check_order_status(*args: bt.Order) -> bool:
         orders = (item for item in args if item is not None)
         if orders:
             return any([True if order.alive() else False for order in orders])
         return False
 
-    def notify_order(self, order):
+    def notify_order(self, order: bt.Order) -> None:
         # Check if an order has been completed
         # Attention: broker could reject order if not enough cash
         if not order.alive():
@@ -286,7 +298,7 @@ class GenericStrategy(bt.Strategy):
         self.log_data(order)
         return
 
-    def plot_results(self):
+    def plot_results(self) -> None:
         plt.rc('axes', labelsize=8)
         fig = plt.figure()
         # change subplot(x) to 121 if adding subplot
@@ -300,7 +312,7 @@ class GenericStrategy(bt.Strategy):
         plt.show()
         pass
 
-    def stop(self):
+    def stop(self) -> None:
         if not self.quiet_mode:
             print('Sell Condition Summary:')
             print(f"\t{'Type':<13}\t{'Count':<5}\t{'Avg Profit':<10}\t {'Avg Profit %':<12}")
