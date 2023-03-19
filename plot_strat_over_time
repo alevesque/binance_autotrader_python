@@ -1,0 +1,204 @@
+import datetime
+import copy
+import matplotlib.pyplot as plt
+import csv
+
+
+'''
+plot_strat_over_time - plots various metrics to help analyse a given logged strategy
+
+
+does incredibly during 2020, 2021 then faceplants in 2022 - if had started it during 2022 would have lost a ton of principal
+    [x] Plot freq of stoptrail/sell trades per month on bar plot to see if theres a period its buying more
+    [x] Plot value of stoptrail/sell trades per month on bar plot to see if theres a period it's losing more
+    [x] Plot potential indicators over time to see which ones line up with the bad market - overlay on all plots to see correlation
+    loses most money in 2022, see if theres an indicator that says the market is shitty like that - 1h EMA400 > 1.XX*EMA600?
+'''
+
+
+###
+# _get_data_for_plot_transaction_freq_and_balance()
+# reads data from transaction_log.txt that was logged in backtest strategy:
+#   [dt, order_name, order_type, order.created.size, order.executed.price,
+#       order_value, order.executed.comm, net_gain/abs(order.created.size), net_gain_percent]
+# returns yearly_transactions{}: [frequency of transactions, net gain] per month per year
+# returns plot_bal{}: [date, 0] per month per year
+# returns list of years used in transaction_log.txt
+###
+def _get_data_for_plot_transaction_freq_and_balance() -> tuple[dict, dict, list]:
+    # initialize multilayer dicts
+    years_list = [2020, 2021, 2022]
+    mos_vals = [i+1 for i in range(12)]
+    years_init = {key: value for (key, value) in zip(mos_vals, [[0, 0] for j in range(12)])}
+    yearly_transactions = {k: v for (k, v) in zip(years_list, [copy.deepcopy(years_init) for k in range(len(years_list))])}
+    plot_bal = copy.deepcopy(yearly_transactions)
+
+    with open('transaction_log.txt', 'r', newline='\n') as transact_log:
+        lei = csv.reader(transact_log, delimiter=',')
+        for leyo in lei:
+            if not leyo:
+                break
+
+            transaction_year = int(datetime.datetime.strptime(leyo[0], '%Y-%m-%d').year)
+            transaction_month = int(datetime.datetime.strptime(leyo[0], '%Y-%m-%d').month)
+            yearly_transactions[transaction_year][transaction_month][0] += 1
+            if leyo[7] != 'None':
+                yearly_transactions[transaction_year][transaction_month][1] += float(leyo[7])
+                plot_bal[transaction_year][transaction_month][1] += float(leyo[7])*abs(float(leyo[3]))
+            plot_bal[transaction_year][transaction_month][0] = datetime.date(transaction_year, transaction_month, 28)
+    return yearly_transactions, plot_bal, years_list
+
+
+###
+# plot_results()
+# takes frequency and transaction data from _get_data_for_plot_transaction_freq_and_balance()
+# plots histograms of in two separate windows of:
+#   - [trade count, profit per trade per share] per month per year
+#   - net gain per month over all years
+###
+def plot_results(yearly_transactions: dict, plot_bal: dict, years_list: list) -> None:
+    fig = plt.figure()
+    trades_per_month = dict()
+    for transaction_year in years_list:
+        trades_per_month[transaction_year] = [[yearly_transactions[transaction_year][y][0],
+                                               yearly_transactions[transaction_year][y][1]/yearly_transactions[transaction_year][y][0]] for y in yearly_transactions[transaction_year]]
+
+    months = [x for x in yearly_transactions[years_list[0]]]
+    col_count = len(years_list)
+    row_count = len(yearly_transactions[transaction_year][1])
+    pos_count = 0
+    ax = [0 for i in range(row_count*col_count)]
+    for j in range(row_count):
+        for i in range(col_count):
+            plot_id = int(f"{row_count}{col_count}{pos_count+1}")
+            ax[pos_count] = fig.add_subplot(plot_id)
+            ax[pos_count].bar(months, height=[count[j] for count in trades_per_month[years_list[i]]])
+            ax[pos_count].set_xlabel('Months')
+            ax[pos_count].set_ylabel('Trades' if j == 0 else 'Avg Profit per Month (per share traded)')
+            pos_count += 1
+    for a, col in zip(ax, years_list):
+        a.set_title(col)
+
+    fig.tight_layout()
+
+    fig2 = plt.figure()
+    # change subplot(x) to 121 if adding subplot
+    # first num is total rows, second is total columns, third is which location to put that named plot (i think)
+    ax1 = fig2.add_subplot(111)
+    q = [plot_bal[plot_bal_year][mon] for plot_bal_year in plot_bal for mon in plot_bal[plot_bal_year]]
+    ax1.bar([i+1 for i in range(len(q))], [mon[1] for mon in q])
+    ax1.title.set_text('Net Gain Per Month')
+    ax1.set_xlabel('Time')
+    ax1.set_ylabel('Money')
+
+    return None
+
+
+###
+# _indic_csv_read()
+# reads indicator data from indic_log.txt that was logged in backtest strategy:
+# takes list of indexes to indic_log.txt of indicators to plot (with similar value scale on y-axis)
+# returns list of [timestamp, indicator1, indicator2, ... indicatorN]
+###
+def _indic_csv_read(indics_to_plot: list) -> list[list]:
+    with open('indic_log.txt', 'r', newline='\n') as indic_log:
+        lines = csv.reader(indic_log, delimiter=',')
+        time_indics = [[] for _ in lines]
+        indic_log.seek(0)
+        for i, line in enumerate(lines):
+            time_indics[i].append(datetime.datetime.strptime(line[0], '%Y-%m-%d'))
+            for indic in indics_to_plot:
+                time_indics[i].append(float(line[indic]))
+    return time_indics
+
+
+###
+# _value_csv_read()
+# reads list of values of executed orders from price_log.txt that was logged in backtest strategy
+# returns list of [timestamp, value of order in USD]
+###
+def _value_csv_read() -> list[list]:
+    with open('price_log.txt', 'r', newline='\n') as price_log:
+        lines_price = csv.reader(price_log, delimiter=',')
+        time_value = [[] for _ in lines_price]
+        price_log.seek(0)
+        for i, line2 in enumerate(lines_price):
+            time_value[i].append(datetime.datetime.strptime(line2[0], '%Y-%m-%d'))
+            time_value[i].append(float(line2[1]))
+    return time_value
+
+
+###
+# plot_indics()
+# takes indicator and order value data from _indic_csv_read() and _value_csv_read()
+# plots line charts overlaid in the same window of:
+#   - indicators over all years
+#   - order values over all years
+###
+def plot_indics(d_t: list, t_v: list, label_indic: list) -> None:
+    fig2 = plt.figure()
+    ax = fig2.add_subplot(111)
+    color_indic = ['b-', 'g-']
+    for sub_indic in range(len(d_t[0])-1):
+        ax.plot([item_[0] for item_ in d_t],
+                [item_[sub_indic+1] for item_ in d_t],
+                color_indic[sub_indic],
+                label=label_indic[sub_indic]
+                )
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Indicator', color='g')
+
+    ax2 = ax.twinx()
+    ax2.plot([item_[0] for item_ in t_v], [item_[1] for item_ in t_v], 'r-', label='Order Value')
+    ax2.set_ylabel('Order Executed Value', color='r')
+    for tl in ax2.get_yticklabels():
+        tl.set_color('r')
+
+    fig2.legend()
+    plt.show()
+    return None
+
+
+# comment out if you don't want to show these
+yearly_transactions, plot_bal, years_list = _get_data_for_plot_transaction_freq_and_balance()
+plot_results(yearly_transactions, plot_bal, years_list)
+
+time_value = _value_csv_read()
+# pick which indicator indexes you want to plot and their names (see below dict to find csv file index)
+indic_index = [22, 23]
+indic_label = ['EMA600', 'EMA400']
+time_indics = _indic_csv_read(indic_index)
+plot_indics(time_indics, time_value, indic_label)
+
+'''
+# FOR REFERENCE FOR indic_index:
+indic_to_log = {
+            'time': dt,
+            'rsi2_5m': self.rsi[0],
+            'rsi6_5m': self.rsi6[0],
+            'rsi12_15m': self.rsi12_15m[0],
+            'bbands20u_15m': self.BBANDS20_15m.upperband[0],
+            'bbands20m_15m': self.BBANDS20_15m.middleband[0],
+            'bbands20l_15m': self.BBANDS20_15m.lowerband[0],
+            'bbands20u_5m': self.BBANDS20_5m.upperband[0],
+            'bbands20m_5m': self.BBANDS20_5m.middleband[0],
+            'bbands20l_5m': self.BBANDS20_5m.lowerband[0],
+            'rsi2_15m': self.rsi_h[0],
+            'rsi6_15m': self.rsi6_h[0],
+            'rsi100_5m': self.rsi100[0],
+            'rsi24_15m':  self.rsi24_h[0],
+            'macd_5m': self.macd[0],
+            'sma200_5m': self.SMA200[0],
+            'sma400_5m': self.SMA400[0],
+            'sma600_5m': self.SMA600[0],
+            'sma100_5m': self.SMA100[0],
+            'sma50_5m': self.SMA50[0],
+            'sma25_5m': self.SMA25[0],
+            'sma5_5m': self.SMA5[0],
+            'ema600_5m': self.EMA600[0],
+            'ema400_5m': self.EMA400[0],
+            'ema100_5m': self.EMA100[0],
+            'ema50_5m': self.EMA50[0],
+            'ema25_5m': self.EMA25[0],
+        }
+        '''
