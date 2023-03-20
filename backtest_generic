@@ -1,3 +1,5 @@
+import datetime
+
 import backtrader as bt
 import matplotlib.pyplot as plt
 
@@ -12,7 +14,7 @@ class GenericStrategy(bt.Strategy):
 
     COMM_RATE = 0.001
 
-    def __init__(self):
+    def __init__(self, log_mode) -> None:
 
         # update with whatever timescale you want to use as baseline
         # must also update self.pos[] in BUYING CONDITIONS
@@ -21,23 +23,27 @@ class GenericStrategy(bt.Strategy):
 
         self.rsi12_15m = bt.talib.RSI(self.datas[1], timeperiod=12)
 
-        self.BBANDS20_15m = bt.talib.BBANDS(self.datas[1].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         self.BBANDS20_5m = bt.talib.BBANDS(self.datas[0].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        self.BBANDS20_15m = bt.talib.BBANDS(self.datas[1].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
 
-        self.csv_logging_mode = ''
+        self.csv_logging_mode = log_mode
         if 'i' in self.csv_logging_mode:
-            open('indic_log.txt', 'w').close()
+            print('Cleared indicator log!')
+            open('Logs/indicator_log.txt', 'w').close()
         if 'v' in self.csv_logging_mode:
-            open('value_log.txt', 'w').close()
+            print('Cleared order value log!')
+            open('Logs/value_log.txt', 'w').close()
         if 't' in self.csv_logging_mode:
-            open('transaction_log.txt', 'w').close()
+            print('Cleared transaction log!')
+            open('Logs/transaction_log.txt', 'w').close()
 
         ####################
         # indicators for logging for analysis, unrelated to backtest
         ####################
         # fucks up result if not included even though it isn't used (spooling time misses a few trades?)
         self.EMA600 = bt.talib.EMA(self.datas[0].close, timeperiod=600)
-        '''
+
+        # comment out here '''
         self.rsi = bt.talib.RSI(self.datas[0].close, timeperiod=2)
         self.rsi6 = bt.talib.RSI(self.datas[0].close, timeperiod=6)
         self.rsi_h = bt.talib.RSI(self.datas[1].close, timeperiod=2)
@@ -59,7 +65,7 @@ class GenericStrategy(bt.Strategy):
         self.EMA100 = bt.talib.EMA(self.datas[0].close, timeperiod=100)
         self.EMA50 = bt.talib.EMA(self.datas[0].close, timeperiod=50)
         self.EMA25 = bt.talib.EMA(self.datas[0].close, timeperiod=25)
-        '''
+        # end comment out here '''
         ####################
 
         self.initial_cash = 10000
@@ -92,10 +98,13 @@ class GenericStrategy(bt.Strategy):
         self.buy_order_duration = 16
         self.sell_order_duration = 31
         self.order_stop_trail_percent = 0.0522
+        # self.EMA_indic_greater = self.EMA400
+        # self.EMA_indic_lesser = self.EMA600
+        self.ema_mult = 1
 
     def log(self, txt: str) -> None:
         # Logging function for this strategy
-        if txt:
+        if txt and not self.quiet_mode:
             dt = self.main_data_scale.datetime
             print('%s, %s, %s' % (dt.date(0).isoformat(), dt.time(), txt))
 
@@ -225,37 +234,9 @@ class GenericStrategy(bt.Strategy):
         dt = self.main_data_scale.datetime.date(0)
         if 'i' in self.csv_logging_mode:
             # log indicators for analysis
-            indic_to_log = {
-                'time': dt,
-                'rsi2_5m': self.rsi[0],
-                'rsi6_5m': self.rsi6[0],
-                'rsi12_15m': self.rsi12_15m[0],
-                'bbands20u_15m': self.BBANDS20_15m.upperband[0],
-                'bbands20m_15m': self.BBANDS20_15m.middleband[0],
-                'bbands20l_15m': self.BBANDS20_15m.lowerband[0],
-                'bbands20u_5m': self.BBANDS20_5m.upperband[0],
-                'bbands20m_5m': self.BBANDS20_5m.middleband[0],
-                'bbands20l_5m': self.BBANDS20_5m.lowerband[0],
-                'rsi2_15m': self.rsi_h[0],
-                'rsi6_15m': self.rsi6_h[0],
-                'rsi100_5m': self.rsi100[0],
-                'rsi24_15m':  self.rsi24_h[0],
-                'macd_5m': self.macd[0],
-                'sma200_5m': self.SMA200[0],
-                'sma400_5m': self.SMA400[0],
-                'sma600_5m': self.SMA600[0],
-                'sma100_5m': self.SMA100[0],
-                'sma50_5m': self.SMA50[0],
-                'sma25_5m': self.SMA25[0],
-                'sma5_5m': self.SMA5[0],
-                'ema600_5m': self.EMA600[0],
-                'ema400_5m': self.EMA400[0],
-                'ema100_5m': self.EMA100[0],
-                'ema50_5m': self.EMA50[0],
-                'ema25_5m': self.EMA25[0],
-            }
+            indicators_to_log = self._update_indicators_to_log()
             # output to csv file
-            self._log_csv('indic_log.txt', **indic_to_log)
+            self._log_csv('Logs/indicator_log.txt', **indicators_to_log)
         # log strategy outcomes for analysis
         if 't' in self.csv_logging_mode:
             strategy_exec_to_log = {
@@ -269,8 +250,48 @@ class GenericStrategy(bt.Strategy):
                 'gain_per_unit': net_gain/abs(order.created.size),
                 'gain_percent': net_gain_percent
             }
-            self._log_csv('transaction_log.txt', **strategy_exec_to_log)
+            self._log_csv('Logs/transaction_log.txt', **strategy_exec_to_log)
         pass
+
+    def _update_indicators_to_log(self) -> dict:
+        indicator_to_log = {
+            'time': self.main_data_scale.datetime.date(0),
+            'rsi2_5m': self.rsi[0],
+            'rsi6_5m': self.rsi6[0],
+            'rsi12_15m': self.rsi12_15m[0],
+            'bbands20u_15m': self.BBANDS20_15m.upperband[0],
+            'bbands20m_15m': self.BBANDS20_15m.middleband[0],
+            'bbands20l_15m': self.BBANDS20_15m.lowerband[0],
+            'bbands20u_5m': self.BBANDS20_5m.upperband[0],
+            'bbands20m_5m': self.BBANDS20_5m.middleband[0],
+            'bbands20l_5m': self.BBANDS20_5m.lowerband[0],
+            'rsi2_15m': self.rsi_h[0],
+            'rsi6_15m': self.rsi6_h[0],
+            'rsi100_5m': self.rsi100[0],
+            'rsi24_15m':  self.rsi24_h[0],
+            'macd_5m': self.macd[0],
+            'sma200_5m': self.SMA200[0],
+            'sma400_5m': self.SMA400[0],
+            'sma600_5m': self.SMA600[0],
+            'sma100_5m': self.SMA100[0],
+            'sma50_5m': self.SMA50[0],
+            'sma25_5m': self.SMA25[0],
+            'sma5_5m': self.SMA5[0],
+            'ema600_5m': self.EMA600[0],
+            'ema400_5m': self.EMA400[0],
+            'ema100_5m': self.EMA100[0],
+            'ema50_5m': self.EMA50[0],
+            'ema25_5m': self.EMA25[0],
+            # below rely on 1h datastream from GenericStrategy_Optimize, so remove when done
+            # couldn't get them to be added via child class
+            'bbands20u_1h': self.BBANDS20_1h.upperband[0],
+            'ema600_1h': self.EMA600_1h[0],
+            'ema400_1h': self.EMA400_1h[0],
+            'ema100_1h': self.EMA100_1h[0],
+            'ema50_1h': self.EMA50_1h[0],
+            'ema25_1h': self.EMA25_1h[0],
+        }
+        return indicator_to_log
 
     @staticmethod
     def _log_csv(log_file: str, **line_to_log: dict) -> None:
@@ -313,7 +334,7 @@ class GenericStrategy(bt.Strategy):
         pass
 
     def stop(self) -> None:
-        if not self.quiet_mode:
+        if self.quiet_mode:  # TODO restore not in this if statement and uncomment plot_results() below
             print('Sell Condition Summary:')
             print(f"\t{'Type':<13}\t{'Count':<5}\t{'Avg Profit':<10}\t {'Avg Profit %':<12}")
             for key in self.sell_cond_count:
@@ -331,7 +352,7 @@ class GenericStrategy(bt.Strategy):
             print(f'Initial Balance: {self.initial_cash:.2f}, ' +
                   f'Max Balance: {self.prev_max_balance:.2f}, ' +
                   f'End Balance: {self.current_balance:.2f}')
-            self.plot_results()
+            # self.plot_results()
 
         if 'o' in self.csv_logging_mode:
             # log optimization settings
@@ -343,17 +364,18 @@ class GenericStrategy(bt.Strategy):
                         self.order_stop_trail_percent,
                         self.prev_max_balance,
                         self.current_balance,
-                        self.sell_cond_count
+                        self.sell_cond_count,
+                        self.ema_mult,
                         )
             sep = ','
             log_line = sep.join([f"\"{str(log_var)}\"" for log_var in log_vars])
             log_line += '\n'
-            with open('opt_log.txt', 'a', newline='\n') as opt_log:
+            with open('Logs/opt_log_add_1h.txt', 'a', newline='\n') as opt_log:
                 opt_log.write(log_line)
 
         if 'v' in self.csv_logging_mode:
             # log order executed values
-            with open('value_log.txt', 'a', newline='\n') as value_log:
+            with open('Logs/value_log.txt', 'a', newline='\n') as value_log:
                 for (t, b) in zip(self.plot_time, self.plot_bal):
                     value_log.write(f"{t},{b}\n")
         pass
