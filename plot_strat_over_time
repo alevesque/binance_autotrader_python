@@ -43,7 +43,7 @@ def _get_data_for_plot_transaction_freq_and_balance() -> tuple[dict, dict, list]
                            }
     plot_bal = copy.deepcopy(yearly_transactions)
 
-    with open('transaction_log.txt', 'r', newline='\n') as transact_log:
+    with open('Logs/transaction_log.txt', 'r', newline='\n') as transact_log:
         lines = csv.reader(transact_log, delimiter=',')
         for line in lines:
             if not line:
@@ -75,7 +75,7 @@ def plot_results() -> None:
             [yearly_transactions[transaction_year][y][0],
              (yearly_transactions[transaction_year][y][1] / yearly_transactions[transaction_year][y][0])
              ]
-            for y in yearly_transactions[transaction_year]
+            if yearly_transactions[transaction_year][y][0] != 0 else [yearly_transactions[transaction_year][y][0], 0] for y in yearly_transactions[transaction_year]
         ]
 
     months = [x for x in yearly_transactions[years_list[0]]]
@@ -111,12 +111,12 @@ def plot_results() -> None:
 
 ###
 # _indic_csv_read()
-# reads indicator data from indic_log.txt that was logged in backtest strategy:
-# takes list of indexes to indic_log.txt of indicators to plot (with similar value scale on y-axis)
+# reads indicator data from indicator_log.txt that was logged in backtest strategy:
+# takes list of indexes to indicator_log.txt of indicators to plot (with similar value scale on y-axis)
 # returns list of [timestamp, indicator1, indicator2, ... indicatorN]
 ###
 def _indic_csv_read(indics_to_plot: list) -> list[list]:
-    with open('indic_log.txt', 'r', newline='\n') as indic_log:
+    with open('Logs/indicator_log.txt', 'r', newline='\n') as indic_log:
         lines = csv.reader(indic_log, delimiter=',')
         time_indics = [[] for _ in lines]
         indic_log.seek(0)
@@ -133,7 +133,7 @@ def _indic_csv_read(indics_to_plot: list) -> list[list]:
 # returns list of [timestamp, value of order in USD]
 ###
 def _value_csv_read() -> list[list]:
-    with open('value_log.txt', 'r', newline='\n') as value_log:
+    with open('Logs/value_log.txt', 'r', newline='\n') as value_log:
         lines_value = csv.reader(value_log, delimiter=',')
         time_value = [[] for _ in lines_value]
         value_log.seek(0)
@@ -155,7 +155,7 @@ def plot_indics(index_indic, label_indic) -> None:
     time_value = _value_csv_read()
     fig2 = plt.figure()
     ax = fig2.add_subplot(111)
-    color_indic = ['b-', 'g-']
+    color_indic = ['b-', 'g-', 'y-', 'b-', 'o-']
     for sub_indic in range(len(time_indics[0])-1):
         ax.plot([item_[0] for item_ in time_indics],
                 [item_[sub_indic+1] for item_ in time_indics],
@@ -181,8 +181,8 @@ def plot_indics(index_indic, label_indic) -> None:
 plot_results()
 
 # pick which indicator indexes you want to plot and their names (see below dict to find csv file index)
-indic_index = [22, 23]
-indic_label = ['EMA600', 'EMA400']
+indic_index = [28, 29, 30, 31, 32]
+indic_label = ['EMA600_1h', 'EMA400_1h', 'ema100_1h', 'ema50_1h', 'ema25_1h']
 plot_indics(indic_index, indic_label)
 
 '''
@@ -215,5 +215,12 @@ indic_to_log = {
             'ema100_5m': self.EMA100[0],
             'ema50_5m': self.EMA50[0],
             'ema25_5m': self.EMA25[0],
+            #
+            'bbands20u_1h': self.BBANDS20_1h.upperband[0],
+            'ema600_1h': self.EMA600_1h[0],
+            'ema400_1h': self.EMA400_1h[0],
+            'ema100_1h': self.EMA100_1h[0],
+            'ema50_1h': self.EMA50_1h[0],
+            'ema25_1h': self.EMA25_1h[0],
         }
         '''
