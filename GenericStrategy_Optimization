@@ -13,8 +13,8 @@ data_5m = bt.feeds.GenericCSVData(dataname='data/2020-23_5m.csv', dtformat=2, co
                                   timeframe=bt.TimeFrame.Minutes, fromdate=from_date, todate=to_date)
 data_15m = bt.feeds.GenericCSVData(dataname='data/2020-23_15m.csv', dtformat=2, compression=15,
                                    timeframe=bt.TimeFrame.Minutes, fromdate=from_date, todate=to_date)
-# data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60,
-#                                   timeframe=bt.TimeFrame.Minutes, fromdate=from_date, todate=to_date)
+data_1h = bt.feeds.GenericCSVData(dataname='data/2020-23_1h.csv', dtformat=2, compression=60,
+                                  timeframe=bt.TimeFrame.Minutes, fromdate=from_date, todate=to_date)
 
 # come up with values
 # graph results (one input at a time vs $) to visualize relationship (linear, etc.)
@@ -26,7 +26,7 @@ sell_logic_multiplier = [1.025]  # range(1020, 1041, 1) # 1.025 best so far
 buy_order_duration = [10]
 sell_order_duration = [20]
 order_stop_trail_percent = [0.073]  # range(725, 735, 1) # remember to change /100 to /1000 below
-
+ema_mult = [100]  # [94]  # range(85, 95, 1)
 '''
 BEST SO FAR, optimize further based on this
     [x] Plot freq of StopTrail/Sell trades per month on bar plot to see if theres a period its buying more
@@ -55,28 +55,57 @@ BEST SO FAR, optimize further based on this
 Initial Balance: 10000.00, Max Balance: 676422.94, End Balance: 134146.78
 '''
 
+'''
+(with spool time of ema600_1h for testing)
+Sell Condition Summary:
+    Type         	Count	Avg Profit	 Avg Profit %
+    LimitBuy     	  539	   -316.33	       -0.20%
+    LimitSell    	   43	  15449.57	       14.11%
+    MarketBuy    	    0	      0.00	        0.00%
+    MarketSell   	    0	      0.00	        0.00%
+    StopTrailBuy 	    0	      0.00	        0.00%
+    StopTrailSell	  495	  -1159.70	       -0.37%
+Initial Balance: 10000.00, Max Balance: 505647.24, End Balance: 100278.88
+'''
+
 
 class BBandMixTimescale(GenericStrategy):
 
     def __init__(self) -> None:
-        super().__init__()
+        self.csv_logging_mode = 'vo'
+        super().__init__(self.csv_logging_mode)
         self.initial_cash = init_cash
+
+        ##########
+        # Extra Indicators
+        ##########
+
+        self.BBANDS20_1h = bt.talib.BBANDS(self.datas[2].close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        self.EMA600_1h = bt.talib.EMA(self.datas[2].close, timeperiod=600)
+        self.EMA400_1h = bt.talib.EMA(self.datas[2].close, timeperiod=400)
+        self.EMA100_1h = bt.talib.EMA(self.datas[2].close, timeperiod=100)
+        self.EMA50_1h = bt.talib.EMA(self.datas[2].close, timeperiod=50)
+        self.EMA25_1h = bt.talib.EMA(self.datas[2].close, timeperiod=25)
         ##########
         # Variables for optimization
         ##########
-        self.quiet_mode = False
-        self.csv_logging_mode = ''
+        self.quiet_mode = True
         self.buy_logic_multiplier = buy_logic_multiplier[a]
         self.buy_logic_rsi_limit = buy_logic_rsi_limit[b]
         self.sell_logic_multiplier = sell_logic_multiplier[c]
         self.buy_order_duration = buy_order_duration[d]
         self.sell_order_duration = sell_order_duration[e]
         self.order_stop_trail_percent = order_stop_trail_percent[f]
+        self.EMA_indic_greater = [self.EMA25_1h, self.EMA50_1h, self.EMA100_1h, self.EMA400_1h, self.EMA600_1h][h]
+        self.EMA_indic_lesser = [self.EMA25_1h, self.EMA50_1h, self.EMA100_1h, self.EMA400_1h, self.EMA600_1h][i]
+        self.ema_mult = ema_mult[g]/100
 
     def buy_logic(self) -> bool:
         # TODO: INSERT BUY CONDITIONS HERE
-        if self.datas[1].low[0] <= self.buy_logic_multiplier*self.BBANDS20_15m.lowerband and self.rsi12_15m < self.buy_logic_rsi_limit:
-            return True
+        if self.datas[1].low[0] <= self.buy_logic_multiplier*self.BBANDS20_15m.lowerband:
+            if self.EMA_indic_greater > self.ema_mult*self.EMA_indic_lesser:  # if self.EMA400_1h > self.ema_mult*self.EMA600_1h:
+                if self.rsi12_15m < self.buy_logic_rsi_limit:
+                    return True
         return False
 
     def sell_logic(self) -> bool:
@@ -93,7 +122,7 @@ def read_results() -> None:
     best_max_bal_index = 0
     best_end_bal = 0.0
     best_end_bal_index = 0
-    with open('opt_log.txt', 'r', newline='\n') as opt_log:
+    with open('Logs/opt_log_add_1h.txt', 'r', newline='\n') as opt_log:
         lines = csv.reader(opt_log, delimiter=',')
         for line in lines:
             if not line:
@@ -121,14 +150,15 @@ def _format_results(best_indices: list[int]) -> None:
     print('# Optimization Summary:')
     print('#' * 30)
     for index, value in enumerate(best_indices):
-        best_line.append(_get_csv_line('opt_log.txt', value))
+        best_line.append(_get_csv_line('Logs/opt_log_add_1h.txt', value))
         print('-' * 30 + '\n\tParameters:')
         print(f"\t{'Buy Logic Mult: ':<19}\t{float(best_line[index][0]):6.4f}\n" +
               f"\t{'Buy Logic RSI Lim: ':<19}\t{float(best_line[index][1]):6.4f}\n" +
               f"\t{'Sell Logic Mult: ':<19}\t{float(best_line[index][2]):6.4f}\n" +
               f"\t{'Buy Order Duration: ':<19}\t{int(best_line[index][3]):<4.0f}\n" +
               f"\t{'Sell Order Duration: ':<19}\t{int(best_line[index][4]):<4.0f}\n" +
-              f"\t{'StopTrail %: ':<19}\t{float(best_line[index][5]):<6.4f}\n")
+              f"\t{'StopTrail %: ':<19}\t{float(best_line[index][5]):<6.4f}\n" +
+              f"\t{'EMA Multiplier: ':<19}\t{float(best_line[index][9]):<6.4f}\n")
         print(f"\t{'Type':<13}\t{'Count':<5}\t{'Avg Profit':<10}\t {'Avg Profit %':<12}")
         sell_cond_count = ast.literal_eval(best_line[index][8])
         for key in sell_cond_count:
@@ -150,7 +180,7 @@ def init_cerebro() -> None:
     cerebro = bt.Cerebro()
     cerebro.adddata(data_5m, name='5m')
     cerebro.adddata(data_15m, name='15m')
-    # cerebro.adddata(data_1h, name='1h')
+    cerebro.adddata(data_1h, name='1h')
     cerebro.broker.set_cash(init_cash)
     cerebro.broker.setcommission(commission=GenericStrategy.COMM_RATE)
     cerebro.addstrategy(BBandMixTimescale)
@@ -163,5 +193,9 @@ for a, _ in enumerate(buy_logic_multiplier):
             for d, _ in enumerate(buy_order_duration):
                 for e, _ in enumerate(sell_order_duration):
                     for f, _ in enumerate(order_stop_trail_percent):
-                        init_cerebro()
+                        for g, _ in enumerate(ema_mult):
+                            for h in range(5):
+                                for i in range(5):
+                                    print(f'Greater index: {h}\nLesser index: {i}\n')
+                                    init_cerebro()
 read_results()
