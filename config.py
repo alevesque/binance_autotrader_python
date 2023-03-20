@@ -9,7 +9,7 @@ Created on Tue Mar 14 15:11:08 2023
 fee = 0.001
 
 use_testnet = True
-reset_orders = True
+reset_orders = False
 
 if use_testnet:
 	#KEYS FOR TESTNET
@@ -32,8 +32,23 @@ else:
 				'XLM': 0
 				}
 
-ALIVE_ORDER_STATUS = ['New', 'PARTIALLY_FILLED']
-#store persistent values and constants that carry over between calls of trading_strategy()
+ALIVE_ORDER_STATUS = ['NEW', 'PARTIALLY_FILLED']
+
+# acceptable parameters for api create_order() method
+API_ORDER_PARAMS = ['symbol', 
+                 'side', 
+                 'type', 
+                 'timeInForce', 
+                 'quantity', 
+                 'quoteOrderQty', 
+                 'price', 
+                 'newClientOrderId', 
+                 'icebergQty', 
+                 'newOrderRespType', 
+                 'recvWindow',
+                 ]
+
+# store persistent values and constants that carry over between calls of trading_strategy()
 carryover_vars = {
 					'prev_max_balance': 0,
 					'current_balance': 0,
@@ -47,15 +62,30 @@ carryover_vars = {
 					'sell_cond_count': [0,0,0,0]
 }
 
-#list of pairs to analyze
-trading_pairs = [
+# list of pairs to analyze
+trading_pairs = {
+    'BNBUSDT':  # change back to xlm
 				{	'pair': "BNBUSDT",		#change back to xlm
 					'precision': 4,
 					'baseAsset': "BNB",
 					'quoteAsset': "USDT"
 
-					}
-]
+					},
+    'XLMUSD':  # change back to xlm
+                {	'pair': "BNBUSDT",		#change back to xlm
+                	'precision': 4,
+                	'baseAsset': "XLM",
+                	'quoteAsset': "USD"
+                
+                	},                
+    'VTHBTC':  # change back to xlm
+    				{	'pair': "ETHBTC",		#change back to xlm
+    					'precision': 4,
+    					'baseAsset': "VTH",
+    					'quoteAsset': "BTC"
+    
+    					},
+}
 
 class Order():
     def __init__(self):
@@ -84,7 +114,7 @@ class Order():
             )
     
     def alive(self):
-        if self.order['status']:
+        if self.order['status'] in ALIVE_ORDER_STATUS:
             return True
         else:
             return False
