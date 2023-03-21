@@ -5,12 +5,12 @@ import datetime, requests, asyncio, warnings, config, sys
 import numpy as np
 import pandas as pd
 from talib import abstract
-#import json
+# import json
 from binance import AsyncClient, BinanceSocketManager
 import aiohttp
 import nest_asyncio
-
-
+# import IPython
+import copy
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', RuntimeWarning)
 
@@ -25,9 +25,9 @@ Binance Autotrader - Generic Framework
 TODO:
 
 check log_data
-reconfigure carryover_vars to instance vars
 change dataframe .append to concat() 
-b/s conditions in trading_strategy to function that sets order_opts{}
+move logging, plotting functions in plot_strat_over_time to config to clean things up
+same with functions in optimization
 
 [ ] 1. run and test
 [X]        2a. implement terminal bell or other notif so can see if good time to buy    
@@ -68,19 +68,12 @@ class BinanceTrader():
         self.order_buy = config.Order()
         
         self.data = None
-                
-        self.carryover_vars = {  # TODO: replace all with instance variables
-        					'prev_max_balance': 0,
-        					'current_balance': 0,
-        					'buyprice': 0,
-        					'buytime': 0,
-        					'buycomm': 0,
-        					'buysize': 0,
-        					'sellprice': 0,
-        					'selltime': 0,
-        					'COMMRATE': 0.001,
-        					'sell_cond_count': [0,0,0,0]
-        }
+        
+        self.COMM_RATE = 0.001
+        self.buy_price = 0
+        self.buy_time = 0
+        self.buy_comm = 0
+        self.buy_size = 0
         pass
         
     
@@ -102,8 +95,6 @@ class BinanceTrader():
         # self.exchangeinfo = [pair for pair in exchange_info_raw['symbols'] if pair['symbol'] in [t_p['pair'] for t_p in config.trading_pairs]]
         # TODO TRY:
         self._set_max_min_trade_qty('LIMIT', 'LIMIT')
-        # self.min_position_buy, self.min_position_sell, self.max_trade_buy, self.max_trade_sell = self._set_max_min_trade_qty('LIMIT', 'LIMIT')
-        
         return
     
     #update wallet values with latest balances
@@ -153,37 +144,28 @@ class BinanceTrader():
     def process_raw_klines(self, new_data_raw: dict) -> None:
 
         # take only relevant data (OHLC, volume)
-        '''new_data = pd.DataFrame.from_dict({
-            'open_time': [new_data_raw['k']['t']],
-            'open': [new_data_raw['k']['o']],
-            'high': [new_data_raw['k']['h']],
-            'low': [new_data_raw['k']['l']],
-            'close': [new_data_raw['k']['c']],
-            'volume': [new_data_raw['k']['v']],
-        })'''
-    
-        new_data = {
+        # convert to float64 so talib doesn't bitch
+        new_data = pd.DataFrame([{
             'open_time': new_data_raw['k']['t'],
             'open': new_data_raw['k']['o'],
             'high': new_data_raw['k']['h'],
             'low': new_data_raw['k']['l'],
             'close': new_data_raw['k']['c'],
             'volume': new_data_raw['k']['v'],
-        }
+        }]).astype('float64')
         
-        #add new data tick onto existing data set and remove the 0th line to avoid dataset getting huge and
-        #overwhelming memory. keep only what is needed for biggest indicator. i.e. 600 lines for EMA600
-        self.data.append(new_data, ignore_index=True)
-        
-        # self.data = pd.concat([self.data, new_data], ignore_index=True)
-        self.data.drop(0)
-        #convert to float64 so talib doesn't bitch
-        self.data.astype('float64')
-        #note: resulting dataframe is 1-indexed not zero
+        #add new data tick onto existing data set and remove the 0th line
+        # to avoid dataset getting huge and overwhelming memory. keep only 
+        # what is needed for biggest indicator. i.e. 600 lines for EMA600
+        self.data = pd.concat([self.data, new_data], ignore_index=True)
+        self.data.drop([0], inplace=True)
+        # print('self.data from self.process_raw_klines():')
+        # IPython.display.display(self.data)
         return
 
-    def _set_max_min_trade_qty(self, buy_type: str, sell_type: str) -> None:# tuple(float):
+    def _set_max_min_trade_qty(self, buy_type: str, sell_type: str) -> None:
         self.trade_qty_limits = {}
+        buy_type_filter = 'MARKET_LOT_SIZE' if buy_type == 'MARKET' else 'LOT_SIZE'
         # creates list of dicts with the trading pair buy/sell limits
         # filters out trading pairs not listed in config.py
         ''' i.e.
@@ -205,7 +187,7 @@ class BinanceTrader():
                 } 
             for asset in self.exchangeinfo 
             for filters in self.exchangeinfo[asset]['filters']
-            if 'LOT_SIZE' in filters['filterType']
+            if buy_type_filter in filters['filterType']
             ]
         # create dict with trading pairs as keys and the applicable 
         # trade_qty_limit_values item as values
@@ -242,59 +224,63 @@ class BinanceTrader():
     def sell_logic(self, indicators: dict) -> bool:
         ############# TODO: INSERT CONDITIONS HERE ##############
         return True
-
+    
+    def setup_order_options(self, pair: str, base_asset_bal: float, quote_asset_bal: float, side: str='S', order_type: str='LIMIT') -> dict:
+        order_options = copy.deepcopy(config.order_opts)
+        self._set_max_min_trade_qty(order_type, order_type)
+        order_options['symbol'] = pair
+        order_options['price'] = float("{:.4f}".format(self.data['close'].values[-1]))
+        if side == 'B':
+            order_options['side'] = 'BUY'
+            self.buy_price = order_options['price']
+            
+            self.buy_size = 10  # TODO reset when not in testnet # float("{:.0f}".format(0.98*quote_asset_bal/self.data['close'].values[-1]))
+            if self.buy_size > self.trade_qty_limits[pair]['max_trade_buy']:
+                self.buy_size = self.trade_qty_limits[pair]['max_trade_buy']
+            order_options['quantity'] = self.buy_size
+            
+            self.buy_comm = self.buy_size*self.buy_price*self.COMM_RATE
+            order_options['commission'] = self.buy_comm
+            self.buy_time = time.time()
+           
+        elif side == 'S':
+            print('order_opts:')
+            print(config.order_opts)
+            if base_asset_bal > self.trade_qty_limits[pair]['max_trade_sell']:
+                base_asset_bal = self.trade_qty_limits[pair]['max_trade_sell']
+            # reset bal when test to self.buy_size
+            order_options['quantity'] = "{0:.{1}f}".format(base_asset_bal, self.exchangeinfo[pair]['baseAssetPrecision'])
+            print(f"self.setup_order_options() sell qty: {order_options['quantity']}")
+            order_options['type'] = order_type
+        
+        return order_options
+            
     ##################################################################
     # TRADING STRATEGY (archaic name, change to something more relevant)
     # Determines if it's the right time, then sets up orders with
     # appropriate parameters.
     ##################################################################
     async def trading_strategy(self, trading_pair: str, indicators: dict) -> config.Order:
-        #reset order info template - if no B/S order is warranted, the empty values will
-        #notify other functions that there wasn't an order this tick
-        # 2023 note: dont want to reset, because need to call api via check_order_status() with last orderId
-        # where does it need these values to reset? - under main "#if trading_strategy() decided conditions warrant an order, place order"
-        # self.order_buy.reset()
-        # self.order_sell_high.reset()
-        # self.order_stop_trail.reset()
-    
-        #shorter variable for asset balance - just so B/S logic is simpler to read
-        
         bal_of_trading_base_asset = self.balance[config.trading_pairs[trading_pair]['baseAsset']]
         bal_of_trading_quote_asset = self.balance[config.trading_pairs[trading_pair]['quoteAsset']]
-        
-        order_opts = {
-            'symbol': trading_pair, 
-            'side': 'SELL',
-            'type': 'LIMIT', #limit, market, etc
-            'timeInForce': 'GTC',
-            'quantity': 0.0,
-            'price': 0.0,
-            # 'newClientOrderId': 0, # optional, autogen by api
-            'time': 0,
-            'status': 'test',
-            'commission': 0.0
+        shared_order_vars = {
+            'pair': trading_pair,
+            'base_asset_bal': bal_of_trading_base_asset,
+            'quote_asset_bal': bal_of_trading_quote_asset
             }
+        order = config.Order()
         #####################
         # BUYING CONDITIONS #
         #####################
         
-        if bal_of_trading_base_asset < self.trade_qty_limits[trading_pair]['min_position_buy']: #reset when live to bal<minpos 
-            if await self.check_order_status(self.order_buy):
+        if bal_of_trading_base_asset < self.trade_qty_limits[trading_pair]['min_position_buy']*0.5: # TODO delete test multiplier #reset when live to bal<minpos 
+            if not self.order_buy.alive():# await self.check_order_status(self.order_buy):
                 if self.buy_logic(indicators):
-                    self.carryover_vars['buysize'] = float("{:.0f}".format(0.98*bal_of_trading_quote_asset/self.data['close'].values[-1]))
-                    if self.carryover_vars['buysize'] > self.trade_qty_limits[trading_pair]['max_trade_buy']:
-                        self.carryover_vars['buysize'] = self.trade_qty_limits[trading_pair]['max_trade_buy']
-
-                    self.carryover_vars['buyprice'] = float("{:.4f}".format(self.data['close'].values[-1]))
-                    self.carryover_vars['buycomm'] = self.carryover_vars['buysize']*self.carryover_vars['buyprice']*self.carryover_vars['COMMRATE']
-                    self.carryover_vars['buytime'] = time.time()
-                    #===========
-                    #BUY ACTIONS
-                    #===========
-                    order_opts['side'] = 'BUY'
-                    order_opts['quantity'] = self.carryover_vars['buysize']
-                    order_opts['price'] = self.carryover_vars['buyprice']
-                    order_opts['commission'] = self.carryover_vars['buycomm']
+                    order_opts = self.setup_order_options(
+                        side='B',
+                        order_type='MARKET',  # TODO del when not in testnet
+                        **shared_order_vars
+                        )
                     self.order_buy.set(**order_opts)
             # if we are in buying mode, set return order to order_buy
             # sets to either the existing order or to the newly set options
@@ -304,32 +290,41 @@ class BinanceTrader():
         # SELLING CONDITIONS #
         ######################
         
-        elif bal_of_trading_base_asset >= self.trade_qty_limits[trading_pair]['min_position_sell']:  # comment out bal >= minpossell when test
-            if await self.check_order_status(self.order_sell_high):
-                # if high sell order is closed, set price and quantity
-                # for new sell order
-                order_opts['price'] = float("{:4f}".format(self.data['close'].values[-1]))
-                if bal_of_trading_base_asset > self.trade_qty_limits[trading_pair]['max_trade_sell']:
-                    bal_of_trading_base_asset = self.trade_qty_limits[trading_pair]['max_trade_sell']
-                # reset bal when test to self.carryover_vars['buysize']
-                order_opts['quantity'] = "{0:.{1}f}".format(bal_of_trading_base_asset, config.trading_pairs[trading_pair]['precision'])
-                
-                if await self.check_order_status(self.order_stop_trail):
+        elif bal_of_trading_base_asset >= self.trade_qty_limits[trading_pair]['min_position_sell'] and bal_of_trading_base_asset != 0.0:  # comment out bal >= minpossell when test
+            if not self.order_sell_high.alive():  # await self.check_order_status(self.order_sell_high):
+                if not self.order_stop_trail.alive():  # await self.check_order_status(self.order_stop_trail):
                     # if both sell orders are closed, set trailstop 
-                    elif time.time() > (self.carryover_vars['buytime'] + 8.5*24*3600):  # TODO: implement trailstop here
-                        order_opts['type'] = 'MARKET'
+                    if time.time() > (self.buy_time + 20):  # TODO: implement trailstop here
+                        print(f"stoptrail sell, status: {self.order_stop_trail.order['status']}")    
+                        order_opts = self.setup_order_options(
+                            order_type='MARKET',
+                            **shared_order_vars
+                            )
                         self.order_stop_trail.set(**order_opts)
                     order = self.order_stop_trail
                 else:  # only stoptrail is open
                     # if sell conditions are good, sell for profit
                     if self.sell_logic(indicators):
+                        print('sell high')
+                        order_opts = self.setup_order_options(**shared_order_vars)
                         self.order_sell_high.set(**order_opts)
-                        order = self.order_sell_high
-                        await self.async_client.cancel_order(
+                        if self.order_stop_trail.alive():  
+                            a = await self.server_connect_try_except(
+                                "self.async_client.cancel_order(" +
+                                "symbol=self.order_stop_trail.order['symbol']," +
+                                "order_Id=self.order_stop_trail.order['orderId'])",
+                                {},
+                                {'self': self}
+                                )
+                            if(a):
+                                print('stoptrail canceled')
+                            
+                        '''await self.async_client.cancel_order(
                             symbol=self.order_stop_trail.order['symbol'],
                             order_Id=self.order_stop_trail.order['orderId']
-                            )
-                        self.order_stop_trail.reset()
+                            )'''
+                        order = self.order_sell_high
+                        # self.order_stop_trail.reset()
                     
             else:
                 # if in sell mode and order_sell_high is open, 
@@ -337,15 +332,25 @@ class BinanceTrader():
                 order = self.order_sell_high
                 pass
         
+        
         return order
         
     async def check_order_status(self, *args: config.Order) -> bool:
         orders = (item for item in args if item.order['symbol'] is not None)
         for order in orders:
-            # if order.order['symbol']:
-            order_details = await self.async_client.get_order(symbol=order['symbol'], orderId=order.order['orderId'])
-            order.set(**order_details)
             if not order.alive():
+                return False
+            order_details = await self.server_connect_try_except(
+                "self.async_client.get_order(" +
+                "symbol=order.order['symbol']," +
+                "orderId=order.order['orderId'])",
+                {},
+                {'order': order, 'self': self}
+                )
+            if order_details:
+                order.set(**order_details)
+            else:
+                print(f"Error querying order: {order.order['orderId']}")
                 return False
         return True
     
@@ -358,10 +363,9 @@ class BinanceTrader():
         if order_result['status']:
             
             #prevent div by zero error on initial iteration - gain % will be wrong but wgaf
-            if self.carryover_vars['buyprice'] == 0.0 or self.carryover_vars['buysize'] == 0.0:
-                self.carryover_vars['buysize'] = 1.0
-                self.carryover_vars['buyprice'] = 1.0
-            
+            if self.buy_price == 0.0 or self.buy_size == 0.0:
+                self.buy_size = 1.0
+                self.buy_price = 1.0
     
             output = (
                         f"OrderID: {order_result['orderId']:3d} Type: {order_result['symbol']:<2} {order_result['type']:<2} " + 
@@ -372,14 +376,14 @@ class BinanceTrader():
                         f"{order_result['quantity']:6.2f} ".rjust(8) +
                         f"Price: {order_result['price']:6.4f} " +
                         f"Cost: {order_result['quantity']*order_result['price']:6.2f} " +
-                        f"Comm: {order_result['quantity']*order_result['price']*self.carryover_vars['COMMRATE']:4.2f} "
+                        f"Comm: {order_result['quantity']*order_result['price']*self.COMM_RATE:4.2f} "
                     )                    
             
             if order_result['status'] == "FILLED":
                 if order_result['side'] == 'SELL':
                     output += (
-                                f"gain: {((order_result['price']-self.carryover_vars['buyprice'])*order_result['quantity'] - order_result['quantity']*order_result['price']*self.carryover_vars['COMMRATE'] - self.carryover_vars['buycomm']):4.2f} " + 
-                                f"gain%: {(100*(((order_result['price']-self.carryover_vars['buyprice'])*self.carryover_vars['buysize'] - order_result['commission'] - self.carryover_vars['buycomm'])/(self.carryover_vars['buysize']*self.carryover_vars['buyprice']))):3.2f}% "
+                                f"gain: {((order_result['price']-self.buy_price)*order_result['quantity'] - order_result['quantity']*order_result['price']*self.COMM_RATE - self.buy_comm):4.2f} " + 
+                                f"gain%: {(100*(((order_result['price']-self.buy_price)*self.buy_size - order_result['commission'] - self.buy_comm)/(self.buy_size*self.buy_price))):3.2f}% "
                                 )
                     
                     # self.carryover_vars['last_order_sell'] = 1
@@ -402,8 +406,6 @@ class BinanceTrader():
                         f"BB-Lower: {indicators[1]['bband_lower']:6.4f} " +
                         f"Close Price: {close_price:6.4f} "
                         )
-        
-    
         print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(), output))
     
         return
@@ -423,11 +425,6 @@ class BinanceTrader():
         # remove extra order params that are useful as part of Order object
         # but are not proper arguments to pass to the api
         order_parameters = {key:value for key, value in order_params.items() if key in config.API_ORDER_PARAMS}
-        # order_parameters = [param for param in order_params if param in config.API_ORDER_PARAMS]
-        '''for param in order_parameters:
-            if param not in config.API_ORDER_PARAMS:
-                del order_parameters[param]'''
-        
         
         #for testing only (ie no order actually placed so fake order response):
         """
@@ -455,9 +452,15 @@ class BinanceTrader():
 
     async def close_all_open_orders(self) -> bool:
         open_orders = await self.async_client.get_open_orders()
-        for order in open_orders:
-            print(f"Order closed: Symbol: {order['symbol']} OrderId: {order['orderId']}")
-            await self.async_client.cancel_order(symbol=order['symbol'], orderId=order['orderId'])
+        if open_orders:
+            for order in open_orders:
+                '''await self.server_connect_try_except(
+                    "self.async_client.cancel_order(symbol=order['symbol'], orderId=order['orderId'])",
+                    {},
+                    {'order': order, 'self': self})'''
+                await self.async_client.cancel_order(symbol=order['symbol'], orderId=order['orderId'])
+                print(f"Order closed: Symbol: {order['symbol']} OrderId: {order['orderId']}")
+        
         return True
     
     async def server_connect_try_except(self, *args):#command: str):
@@ -559,7 +562,7 @@ class BinanceTrader():
     async def initialize_trade_engine(self) -> bool:
         await self._initialize_exchange_connection()
         if config.reset_orders:
-            if self.close_all_open_orders():
+            if await self.close_all_open_orders():
                 print('All open orders closed.')
         
         await self.get_exchange_info()
@@ -584,33 +587,32 @@ async def main(*args: bool) -> None:
             order_result = {}
             # start receiving messages
             new_data_raw = await autotrader.receive_stream(loop_active_bool)
-            
             if not init_status:
                 continue
-            #process raw data into simpler form and append to data structure
+            # process raw data into simpler form and append to data structure
             autotrader.process_raw_klines(new_data_raw)
-            
-            #send data to function to calculate indicators
-            #NOTE: testnet only goes back ~170 ticks
+            # send data to function to calculate indicators
+            # NOTE: testnet only goes back ~170 ticks
             indicators = autotrader.indicator_data()
             pair_to_trade = 'BNBUSDT'
             #takes data and checks if orders are done, logic true etc and returns order if so
             order = await autotrader.trading_strategy(pair_to_trade, indicators)
-
             #if trading_strategy() decided conditions warrant an order, place order
             if order.order['side']:
-
                 async with autotrader.trade_manager as order_response:
-                    print(autotrader.balance)
+                    # print(autotrader.balance)
+                    # print(order.order)
                     order_result = await autotrader.place_order(**order.order)
+                    
                     if order_result:
                         order.order['status'] = order_result['status']
                     else:
+                        print('Error placing order.')
                         continue
                         
                     
-                    if not order_result:
-                        break
+                    '''if not order_result:
+                        break'''
                     while order.alive():
                         # if it hasnt been more than an hour, try to sell more partial orders
                         if order_result['time']/1000 < (autotrader.data['open_time'].values[-1]/1000)+3600:
@@ -634,13 +636,15 @@ async def main(*args: bool) -> None:
  
                     #update wallet balance
                     if (await autotrader.balance_update() == False):
+                        print('balance update false')
                         break
             else:
                 #log data and return updated persistent variables
                 order_result['time'] = autotrader.data['open_time'].values[-1]
+                order_result['status'] = None
                 
             #log data and return updated b/s order status (order b/s complete)
-            autotrader.log_data(indicators, autotrader.data['close'].values[-1], order_result)
+            # autotrader.log_data(indicators, autotrader.data['close'].values[-1], order_result)
         await autotrader.async_client.close_connection()
     sys.exit(0)
   
@@ -651,7 +655,6 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     
     try:
-        print('Running')
         loop_active_bool = True
         # loop.create_task(main(loop_active_bool))
         asyncio.run(main(loop_active_bool))
