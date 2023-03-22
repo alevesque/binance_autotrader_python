@@ -1,0 +1,426 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Mar 22 13:59:01 2023
+
+@author: alevesque
+"""
+from __future__ import annotations
+from binance.exceptions import *
+import time
+import datetime, requests, asyncio, warnings, config, sys
+import numpy as np
+import pandas as pd
+from talib import abstract
+# import json
+from binance import AsyncClient, BinanceSocketManager
+import aiohttp
+import nest_asyncio
+# import IPython
+import copy
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore', RuntimeWarning)
+from signal import SIGINT, SIGTERM
+
+class BinanceTrader():
+    
+    def __init__(self):
+        
+        self.exchangeinfo = []
+        self.async_client = None
+        self.bm = None
+        self.trade_manager = None
+        
+        self.order_stop_trail = config.Order()
+        self.order_sell_high = config.Order()
+        self.order_buy = config.Order()
+        
+        self.data = None
+        
+        self.COMM_RATE = 0.001
+        self.buy_price = 0
+        self.buy_time = 0
+        self.buy_comm = 0
+        self.buy_size = 0
+        pass
+    
+    async def _initialize_trade_engine(self) -> bool:
+        await self._initialize_exchange_connection()
+        if config.reset_orders:
+            if await self._close_all_open_orders():
+                print('All open orders closed.')
+        
+        await self.get_exchange_info()
+        await self._prelim_data_spool()
+        # start any sockets here, i.e. a trade socket
+        self.xlmusd_kline_5m = self.bm.kline_socket(symbol=config.trading_pairs['XLMUSD']['pair'], interval='5m')
+        self.trade_manager = self.bm.user_socket()
+        print('Sockets initialized.')
+        self.balance = {}
+        await self._balance_update()
+        print(self.balance)
+        print('Initialization Complete.')
+        return True
+    
+    async def _initialize_exchange_connection(self) -> None:
+        # initialize websocket client to livestream data one ping at a time. preferable to 
+        # downloading redundant or late data as would happen with manual update periods using regular client
+        self.async_client = await AsyncClient.create(api_key=config.API_KEY, api_secret=config.API_SECRET, testnet=config.use_testnet, tld='us')
+        self.bm = BinanceSocketManager(self.async_client, user_timeout=5)
+        if self.async_client and self.bm:
+            print('Exchange connection and websocket manager initialized.')
+
+    async def _prelim_data_spool(self) -> bool:
+        # download initial data for the longer EMA timeframes, so calculations can start immediately
+        # rather than spooling up hundreds of ticks of price data for EMA600, 400 etc
+        for trading_pair in self.exchangeinfo:
+            init_data_raw = await self.async_client.get_klines(symbol=trading_pair, interval='5m', limit=601)
+            self.data = pd.DataFrame(np.array(init_data_raw)[:,0:6],
+                       columns=['open_time', 'open', 'high', 'low', 'close', 'volume'],
+                       dtype='float64')
+            print('Initial data loaded - {}'.format(trading_pair))
+        return True
+    
+    #update wallet values with latest balances
+    async def _balance_update(self) -> bool:
+        ''' sets self.balance to dict of form:
+            {
+                'BNB': 1000.00,
+                'XLM': 900000.00,
+                }'''
+        #get account info for balance checking
+        acc_result = await self._server_connect_try_except('self.async_client.get_account(recvWindow=10000)')
+        if 'balances' in acc_result:
+            wallet_pair_list = [pair for pair in config.balance]
+            for bal in acc_result['balances']:
+                if bal['asset'] in wallet_pair_list:
+                    self.balance[bal['asset']] = float(bal['free'])
+            return True
+        else:
+            print('No balances in Account!')
+            return False
+        
+    async def _server_connect_try_except(self, *args):#command: str):
+        try:
+            conn_result = await eval(*args)
+        except BinanceAPIException as e:
+            print(e)
+            print('Error querying server - something went wrong.')
+            return False
+        except requests.exceptions.RequestException as e:
+            print(e)
+            print('Error - Check connection')
+            return False
+        except aiohttp.client_exceptions.ClientOSError as e:
+            print(e)
+            print('Error - connection reset by peer.')
+            return False
+        except asyncio.CancelledError:
+            print('server connect try except cancelled')
+            return False
+        else:
+            return conn_result
+        
+    def _order_stream_data_process(self, order_result_raw: dict, datastream: str) -> dict:
+        order_result = {}
+        if order_result_raw:
+            if datastream == 'Type1':
+                cumulative_comm = 0.0
+                cumulative_price = 0.0
+                for x in order_result_raw['fills']:
+                    cumulative_comm += float(x['commission'])
+                    cumulative_price += float(x['price'])
+                i = len(order_result_raw['fills'])
+                if i != 0:
+                    order_result_raw['price'] = float(cumulative_price) / i
+
+                order_result = copy.deepcopy(order_result_raw)  # {key:value for key, value in order_result_raw}
+                order_result['quantity'] = float(order_result.pop('executedQty'))
+                order_result['time'] = float(order_result.pop('transactTime'))
+                order_result['price'] = float(order_result.pop('price'))
+                order_result['commission'] = cumulative_comm
+                if order_result['side'] == 'BUY' and order_result['status'] == 'FILLED':
+                    self.buy_comm = cumulative_comm
+                
+            elif datastream == 'Type2':
+                order_result = {
+                                'symbol': order_result_raw['s'],
+                                'side': order_result_raw['S'],
+                                'type': order_result_raw['o'],
+                                'timeInForce': order_result_raw['f'],
+                                'quantity': float(order_result_raw['z']),
+                                'price': float(order_result_raw['p']),
+                                'orderId': order_result_raw['i'],
+                                'time': float(order_result_raw['E']),
+                                'status': order_result_raw['X'],
+                                'commission': float(order_result_raw['n'])
+                                }
+        else:
+            order_result = order_result_raw
+        return order_result
+    
+    async def _close_all_open_orders(self) -> bool:
+        try:
+            open_orders = await self.async_client.get_open_orders()
+            if open_orders:
+                for order in open_orders:
+                    '''await self._server_connect_try_except(
+                        "self.async_client.cancel_order(symbol=order['symbol'], orderId=order['orderId'])",
+                        {},
+                        {'order': order, 'self': self})'''
+                    await self.async_client.cancel_order(symbol=order['symbol'], orderId=order['orderId'])
+                    print(f"Order closed: Symbol: {order['symbol']} OrderId: {order['orderId']}")
+            
+            return True
+        except asyncio.CancelledError:
+            print('close all open orders cancelled')
+            return False
+    
+    def log_data(self, indicators, close_price, order_result) -> bool:
+        
+        dt = datetime.datetime.fromtimestamp(order_result['time']/1000)
+    
+        # if an order is currently active, log relevant info to console
+        # otherwise log indicators
+        if order_result['status']:
+            print(order_result)
+            #prevent div by zero error on initial iteration - gain % will be wrong but wgaf
+            if self.buy_price == 0.0 or self.buy_size == 0.0:
+                self.buy_size = 1.0
+                self.buy_price = 1.0
+            output = (
+                        f"OrderID: {order_result['orderId']:3d} " + 
+                        f"Type: {order_result['symbol']:<2} " + 
+                        f"{order_result['type']:<2} " + 
+                        f"{order_result['side']:<2} ".ljust(5) +
+                        "Status: " +
+                        f"{order_result['status']:1} ".ljust(17) +
+                        "Size: ".ljust(6) +
+                        f"{order_result['quantity']:6.2f} ".rjust(8) +
+                        f"Price: {order_result['price']:6.4f} " +
+                        f"Cost: {order_result['quantity']*order_result['price']:6.2f} " +
+                        f"Comm: {order_result['commission']:4.2f} "
+                    )                    
+            
+            if order_result['status'] == "FILLED":
+                if order_result['side'] == 'SELL':
+                    profit = (order_result['price']-self.buy_price)*order_result['quantity']
+                    loss = order_result['commission'] + self.buy_comm
+                    initial_buy_cost = self.buy_size*self.buy_price
+                    output += (
+                                f"gain: {(profit - loss):4.2f} " + 
+                                f"gain%: {100*(profit - loss)/initial_buy_cost:3.2f}% "
+                                )
+                else:
+                    print("\a")
+                f = open("tradelog.txt", "a")
+                f.write('%s, %.8s, %s \n' % (dt.date().isoformat(), dt.time(), output))
+                f.close()
+            
+        else:
+            output = (    
+                        f"RSI6: {indicators[1]['RSI6']:7.4f} " +
+                        f"RSI50: {indicators[1]['RSI50']:7.4f} " +
+                        f"BB-Upper: {indicators[1]['bband_upper']:6.4f} " +
+                        f"BB-Middle: {indicators[1]['bband_middle']:6.4f} " +
+                        f"BB-Lower: {indicators[1]['bband_lower']:6.4f} " +
+                        f"Close Price: {close_price:6.4f} "
+                        )
+        print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(), output))
+    
+        return
+      
+    '''
+    async def check_order_status(self, *args: config.Order) -> bool:
+        orders = (item for item in args if item.order['symbol'] is not None)
+        for order in orders:
+            if not order.alive():
+                return False
+            order_details = await self._server_connect_try_except(
+                "self.async_client.get_order(" +
+                "symbol=order.order['symbol']," +
+                "orderId=order.order['orderId'])",
+                {},
+                {'order': order, 'self': self}
+                )
+            if order_details:
+                order.set(**order_details)
+            else:
+                print(f"Error querying order: {order.order['orderId']}")
+                return False
+        return True
+    '''
+    
+    ##################################################################
+    # RECEIVE STREAM
+    # Receives latest kline from API
+    ##################################################################
+    async def receive_stream(self):
+        try:
+            # start receiving messages
+            async with self.xlmusd_kline_5m as xlmusd_kline_5m_message:
+                # take in new kline data from websocket stream
+                new_data_raw = await self._server_connect_try_except("obj", {}, {"obj": xlmusd_kline_5m_message.recv()})
+                self._process_raw_klines(new_data_raw)
+                return
+        except asyncio.CancelledError:
+            print('receive_stream() cancelled')
+            return
+        
+    ##################################################################
+    # PROCESS RAW KLINES
+    # Appends relevant information to self.data and removes first entry
+    # to avoid overloading memory (only take what we need from past data)
+    ##################################################################
+    def _process_raw_klines(self, new_data_raw: dict) -> None:
+
+        # take only relevant data (OHLC, volume)
+        # convert to float64 so talib doesn't bitch
+        new_data = pd.DataFrame([{
+            'open_time': new_data_raw['k']['t'],
+            'open': new_data_raw['k']['o'],
+            'high': new_data_raw['k']['h'],
+            'low': new_data_raw['k']['l'],
+            'close': new_data_raw['k']['c'],
+            'volume': new_data_raw['k']['v'],
+        }]).astype('float64')
+        
+        #add new data tick onto existing data set and remove the 0th line
+        # to avoid dataset getting huge and overwhelming memory. keep only 
+        # what is needed for biggest indicator. i.e. 600 lines for EMA600
+        self.data = pd.concat([self.data, new_data], ignore_index=True)
+        self.data.drop([0], inplace=True)
+        return
+    
+    async def get_exchange_info(self):
+        try:
+            exchange_info_raw = await self.async_client.get_exchange_info()
+            # self.exchangeinfo is dict of dicts, each containing exchange information about a trading pair listed in config
+            assets = [t_p for t_p in config.trading_pairs]
+            asset_details = [p for p in exchange_info_raw['symbols']
+                             if p['symbol'] in assets]
+            self.exchangeinfo = {pair:symbol for pair, symbol in 
+                            zip(
+                                [s['symbol'] for s in asset_details],
+                                [p for p in exchange_info_raw['symbols']
+                                 if p['symbol'] in assets
+                                 ]
+                                )}
+            self._set_max_min_trade_qty('LIMIT', 'LIMIT')
+            return
+        except asyncio.CancelledError:
+            print('get_exchange_info() cancelled')
+            return
+        
+    def _set_max_min_trade_qty(self, buy_type: str, sell_type: str) -> None:
+        self.trade_qty_limits = {}
+        buy_type_filter = 'MARKET_LOT_SIZE' if buy_type == 'MARKET' else 'LOT_SIZE'
+        # creates list of dicts with the trading pair buy/sell limits
+        # filters out trading pairs not listed in config.py
+        ''' i.e.
+        [{'max_trade_buy': '100000.00000000',
+          'max_trade_sell': '100000.00000000',
+          'min_position_buy': '0.00100000',
+          'min_position_sell': '0.00100000'},
+         {'max_trade_buy': '200000.00000000',
+          'max_trade_sell': '200000.00000000',
+          'min_position_buy': '0.00200000',
+          'min_position_sell': '0.00200000'}]
+        '''
+        trade_qty_limit_values = [
+            {
+                'min_position_buy': float(filters['minQty']),
+                'min_position_sell': float(filters['minQty']),
+                'max_trade_buy': float(filters['maxQty']), 
+                'max_trade_sell': float(filters['maxQty'])
+                } 
+            for asset in self.exchangeinfo 
+            for filters in self.exchangeinfo[asset]['filters']
+            if buy_type_filter in filters['filterType']
+            ]
+        # create dict with trading pairs as keys and the applicable 
+        # trade_qty_limit_values item as values
+        ''' i.e. 
+        {'BNBUSDT': {'max_trade_buy': '100000.00000000',
+                     'max_trade_sell': '100000.00000000',
+                     'min_position_buy': '0.00100000',
+                     'min_position_sell': '0.00100000'},
+         'VTHBTC': {'max_trade_buy': '200000.00000000',
+                    'max_trade_sell': '200000.00000000',
+                    'min_position_buy': '0.00200000',
+                    'min_position_sell': '0.00200000'}}}
+        '''
+        self.trade_qty_limits = {
+            pair:limits for pair, limits in 
+            zip(
+                [t_p for t_p in self.exchangeinfo],
+                [trade_qty_limit_values[i] for i in range(len(self.exchangeinfo))]
+                )
+            }
+        pass
+    
+    def setup_order_options(self, pair: str, base_asset_bal: float, quote_asset_bal: float, side: str='S', order_type: str='LIMIT', order_name: str='') -> dict:
+        print('oo')
+        order_options = copy.deepcopy(config.order_opts)
+        self._set_max_min_trade_qty(order_type, order_type)
+        order_options['symbol'] = pair
+        order_options['price'] = float("{:.4f}".format(self.data['close'].values[-1]))
+        order_options['type'] = order_type
+        order_options['name'] = order_name
+        if side == 'B':
+            order_options['side'] = 'BUY'
+            self.buy_price = order_options['price']
+            self.buy_size = 1  # TODO reset when not in testnet # float("{:.0f}".format(0.98*quote_asset_bal/self.data['close'].values[-1]))
+            if self.buy_size > self.trade_qty_limits[pair]['max_trade_buy']:
+                self.buy_size = self.trade_qty_limits[pair]['max_trade_buy']
+            order_options['quantity'] = self.buy_size
+            self.buy_time = time.time()
+           
+        elif side == 'S':
+            if base_asset_bal > self.trade_qty_limits[pair]['max_trade_sell']:
+                base_asset_bal = self.trade_qty_limits[pair]['max_trade_sell']
+            # reset bal when test to self.buy_size
+            order_options['quantity'] = float("{0:.{1}f}".format(base_asset_bal, self.exchangeinfo[pair]['baseAssetPrecision']))
+        return order_options
+    
+    ##################################################################
+    # BUY LOGIC
+    # Takes indicators and returns True/False if conditions are met or not
+    ##################################################################
+    def buy_logic(self, indicators: dict) -> bool:
+        ######### TODO: INSERT BUY CONDITIONS HERE ##########
+        return True
+    
+    ##################################################################
+    # SELL LOGIC
+    # Takes indicators and returns True/False if conditions are met or not
+    ##################################################################
+    def sell_logic(self, indicators: dict) -> bool:
+        ############# TODO: INSERT CONDITIONS HERE ##############
+        return True
+    
+    ###################################################################
+    # INDICATOR DATA
+    # Calculates indicators from the latest self.data and returns the
+    # nth and (n-1)th indicators
+    ##################################################################
+    def indicator_data(self) -> dict:
+        #calculate indicators
+        # print(self.data['close'])
+        RSI6 = abstract.RSI(self.data['close'].values,timeperiod=6)
+        RSI50 = abstract.RSI(self.data['close'].values,timeperiod=50)
+        bband_upper, bband_middle, bband_lower = abstract.BBANDS(self.data['close'],timeperiod=20, nbdevup=2.0, nbdevdn=2.0, matype=5)
+
+        indicators = {}
+        # Index note: indicators[1] == RSIXX[-1] and indicators[0] == RSIXX[-2]
+        # range(2) because we want both the ultimate and penultimate values
+        for i in range(2):  
+            indicators[i] = { 
+
+                            'RSI6': RSI6[i-2],
+                            'RSI50': RSI50[i-2],
+                            'bband_upper': bband_upper[i-2],
+                            'bband_middle': bband_middle[i-2],
+                            'bband_lower': bband_lower[i-2]    
+                            
+                            }
+        return indicators
