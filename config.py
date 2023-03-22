@@ -9,7 +9,7 @@ Created on Tue Mar 14 15:11:08 2023
 fee = 0.001
 
 use_testnet = True
-reset_orders = False
+reset_orders = True
 
 if use_testnet:
 	#KEYS FOR TESTNET
@@ -47,20 +47,18 @@ API_ORDER_PARAMS = ['symbol',
                  'newOrderRespType', 
                  'recvWindow',
                  ]
-
-# store persistent values and constants that carry over between calls of trading_strategy()
-carryover_vars = {
-					'prev_max_balance': 0,
-					'current_balance': 0,
-					'buyprice': 0,
-					'buytime': 0,
-					'buycomm': 0,
-					'buysize': 0,
-					'sellprice': 0,
-					'selltime': 0,
-					'COMMRATE': 0.001,
-					'sell_cond_count': [0,0,0,0]
-}
+order_opts = {
+    'symbol': '', 
+    'side': 'SELL',
+    'type': 'LIMIT', #limit, market, etc
+    'timeInForce': 'GTC',
+    'quantity': 0.0,
+    'price': 0.0,
+    # 'newClientOrderId': 0, # optional, autogen by api
+    'time': 0,
+    'status': 'NEW',
+    'commission': 0.0
+    }
 
 # list of pairs to analyze
 trading_pairs = {
