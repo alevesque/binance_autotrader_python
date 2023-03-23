@@ -63,27 +63,36 @@ order_opts = {
 # list of pairs to analyze
 trading_pairs = {
     'BNBUSDT':  # change back to xlm
-				{	'pair': "BNBUSDT",		#change back to xlm
+				{
 					'precision': 4,
 					'baseAsset': "BNB",
 					'quoteAsset': "USDT"
 
 					},
     'XLMUSD':  # change back to xlm
-                {	'pair': "BNBUSDT",		#change back to xlm
+                {
                 	'precision': 4,
                 	'baseAsset': "XLM",
                 	'quoteAsset': "USD"
                 
                 	},                
     'VTHBTC':  # change back to xlm
-    				{	'pair': "ETHBTC",		#change back to xlm
+    				{
     					'precision': 4,
     					'baseAsset': "VTH",
     					'quoteAsset': "BTC"
     
     					},
+    'LTCBUSD':  # change back to xlm
+    				{
+    					'precision': 4,
+    					'baseAsset': "LTC",
+    					'quoteAsset': "BUSD"
+    
+    					},
 }
+
+intervals = ['5m', '15m']
 
 class Order():
     def __init__(self):
