@@ -1,45 +1,71 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Mar 23 08:07:32 2023
+
+@author: alevesque
+"""
+
 from __future__ import annotations
 import time
 import asyncio
 import warnings
-from binance_trader_class_def import BinanceTrader
+from binance_trader_class_def import BinanceTraderWIP
 import nest_asyncio
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', RuntimeWarning)
 
 
 async def main() -> None:
-    trader = BinanceTrader()
-    while True:
+    pair_to_trade = 'BNBUSDT'
+    autotrader = BinanceTraderWIP()
+    while True:  # continue running contents as long as no KeyboardInterrupt
+        # start time of loop, so can reconnect before server ~24h timeout    
         start_time = time.time()
-        await trader._initialize_trade_engine()
+        # connect to exchange server, setup websockets, trade manager, client
+        await autotrader.initialize_trade_engine()
         try:
-            while time.time() < start_time+10:
-                print('1s')
+            # if it has been more than x hours, restart loop to reconnect
+            # and avoid server timeout
+            while time.time() < start_time+100:
+                print('await streams')
+                indicators = await autotrader.receive_stream()
+                print('received streams')
+                # indicators = autotrader.indicator_data()
+                # order = autotrader.trading_strategy(pair_to_trade, indicators)
+                # print(order.order)
+                
+                order_result = {}
+                order_result['status'] = None
+                for trading_pair in autotrader.exchangeinfo:
+                    for interval in autotrader.intervals:
+                        order_result['time'] = autotrader.data[trading_pair][interval]['open_time'].values[-1]
+                        autotrader.log_data(indicators, autotrader.data[trading_pair][interval]['close'].values[-1], order_result)
                 time.sleep(1)
-                pass
-
-        except KeyboardInterrupt:
+        except KeyboardInterrupt:  # if Ctrl+C or IDE stopped - doesn't seem to trigger if program is interrupted in a sub task
             print('Program interrupted.')
             return
+        except asyncio.CancelledError:
+            print('Program cancelled')
+            return
         finally:
-            await trader.async_client.close_connection()
+            await autotrader.async_client.close_connection()
 
 
 if __name__ == "__main__":
-    nest_asyncio.apply()
-    loop = asyncio.get_event_loop()
+    nest_asyncio.apply()  # allows async functions to run in an IDE IPython console
+    loop = asyncio.get_event_loop()  # create main asynchronous loop
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
+        asyncio.run(main())  # run main()
+    except KeyboardInterrupt:  # if program stopped via IDE or Ctrl+C - triggers if program interrupted in sub task but not if in main loop
         print('Keyboard Interrupt')
-
     finally:
+        # close out pending asynchronous tasks
         print('Find all running tasks')
-        pending = asyncio.all_tasks(loop=loop)
+        pending = asyncio.all_tasks(loop=loop)  
         for task in pending:
             print(task.get_name())
             task.cancel()
+        # all tasks closed, now stop loop and exit
         if loop.is_running():
             print('stop loop')
             loop.stop()
