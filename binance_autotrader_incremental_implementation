@@ -1,38 +1,34 @@
 from __future__ import annotations
 import time
-import asyncio, warnings
+import asyncio
+import warnings
 from binance_trader_class_def import BinanceTrader
 import nest_asyncio
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', RuntimeWarning)
 
 
-async def loop_setup():
-    start_time = time.time()
-    print(start_time)
-    return
-
-
 async def main() -> None:
     trader = BinanceTrader()
-    await trader._initialize_trade_engine()
-    try:
-        while True:
-            pass
-            # await loop_setup()
+    while True:
+        start_time = time.time()
+        await trader._initialize_trade_engine()
+        try:
+            while time.time() < start_time+10:
+                print('1s')
+                time.sleep(1)
+                pass
 
-    except KeyboardInterrupt:
-        print('Program interrupted.')
-        b = await trader.async_client.close_connection()
-        return
+        except KeyboardInterrupt:
+            print('Program interrupted.')
+            return
+        finally:
+            await trader.async_client.close_connection()
 
 
 if __name__ == "__main__":
     nest_asyncio.apply()
     loop = asyncio.get_event_loop()
-    # main_task = asyncio.ensure_future(main())
-    # for signal in [SIGINT, SIGTERM]:
-    #    loop.add_signal_handler(signal, main_task.cancel)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
