@@ -16,10 +16,9 @@ with warnings.catch_warnings():
 
 
 async def main() -> None:
-    pair_to_trade = 'BNBUSDT'
     autotrader = BinanceTraderWIP()
     while True:  # continue running contents as long as no KeyboardInterrupt
-        # start time of loop, so can reconnect before server ~24h timeout    
+        # start time of loop, so can reconnect before server ~24h timeout
         start_time = time.time()
         # connect to exchange server, setup websockets, trade manager, client
         await autotrader.initialize_trade_engine()
@@ -30,21 +29,23 @@ async def main() -> None:
                 print('await streams')
                 indicators = await autotrader.receive_stream()
                 print('received streams')
-                # indicators = autotrader.indicator_data()
-                # order = autotrader.trading_strategy(pair_to_trade, indicators)
-                # print(order.order)
-                
-                order_result = {}
-                order_result['status'] = None
+                order = autotrader.trading_strategy(indicators)
+                print(order.order)
+
+                order_result = order.order
+                if not order_result:
+                    order_result['time'] = autotrader.data[trading_pair][interval]['open_time'].values[-1]
+                    order_result['status'] = None
                 for trading_pair in autotrader.exchangeinfo:
                     for interval in autotrader.intervals:
-                        order_result['time'] = autotrader.data[trading_pair][interval]['open_time'].values[-1]
                         autotrader.log_data(indicators, autotrader.data[trading_pair][interval]['close'].values[-1], order_result)
                 time.sleep(1)
         except KeyboardInterrupt:  # if Ctrl+C or IDE stopped - doesn't seem to trigger if program is interrupted in a sub task
             print('Program interrupted.')
             return
-        except asyncio.CancelledError:
+        except RuntimeError:
+            print('runtime error')
+        except asyncio.CancelledError:  # triggers in linux not windows
             print('Program cancelled')
             return
         finally:
@@ -58,10 +59,12 @@ if __name__ == "__main__":
         asyncio.run(main())  # run main()
     except KeyboardInterrupt:  # if program stopped via IDE or Ctrl+C - triggers if program interrupted in sub task but not if in main loop
         print('Keyboard Interrupt')
+    except RuntimeError:
+        print('runtime error')
     finally:
         # close out pending asynchronous tasks
         print('Find all running tasks')
-        pending = asyncio.all_tasks(loop=loop)  
+        pending = asyncio.all_tasks(loop=loop)
         for task in pending:
             print(task.get_name())
             task.cancel()
