@@ -18,73 +18,62 @@ with warnings.catch_warnings():
 
 async def main() -> None:
     
-    channels = {'kline_' + interv for interv in config.intervals}
     autotrader = BinanceTraderWIP(intervs=[interv for interv in config.intervals])
     
     while True:  # continue running contents as long as no KeyboardInterrupt
         # start time of loop, so can reconnect before server ~24h timeout
         start_time = time.time()
         # connect to exchange server, setup websockets, trade manager, client
-        init_data_spool = await autotrader.initialize_trade_engine()
-        markets = {trading_pair for trading_pair in autotrader.exchangeinfo}
-        kl_socket = BinanceWs(channels=channels, markets=markets, spool=init_data_spool)
+        await autotrader.initialize_trade_engine()
+        
         try:
             # if it has been more than x hours, restart loop to reconnect
             # and avoid server timeout
             while time.time() < start_time+3600*20:
-                await kl_socket.run()
-                orders = autotrader.trading_strategy(kl_socket.indicators, kl_socket.data)
+                await autotrader.kl_socket.run()
+                # print(autotrader.kl_socket.bal_update_flag)
+                # if autotrader.kl_socket.bal_update_flag == True:
+                    # print('0')
+                
+                orders = await autotrader.trading_strategy(autotrader.kl_socket.indicators, autotrader.kl_socket.data)
+              
                 if orders:
                     order_result = {}
-                    for trading_pair in markets:
-                        if orders[trading_pair]:
-                            # TODO order_result[trading_pair] = place_order(orders[trading_pair])
-                            order_result[trading_pair] = orders[trading_pair]
-                        else:
-                            order_result[trading_pair]['status'] = None
-                    
-                        '''
-                        if order.order['side'] in ['BUY', 'SELL']:
-                            async with autotrader.trade_manager as order_response:  # TODO switch this for a unicorn socket
-                                print(autotrader.balance)
-                                order_result = await autotrader.place_order(**order.order)
-                                if order_result:
-                                    order.order['status'] = order_result['status']
-                                else:
-                                    print('Error placing order.')
-                        '''
-                        '''
-                                while order.alive():
-                                    print('e')
-                                    if order_result['status'] != last_order_status:
-                                        print('f')
-                                        autotrader.log_data(indicators, autotrader.data['close'].values[-1], order_result)
-                                    # if it hasnt been more than an hour, try to sell more partial orders
-                                    if order_result['time']/1000 < (autotrader.data['open_time'].values[-1]/1000)+3600:
-                                        print('order alive')
-                                        order_result_raw = await autotrader._server_connect_try_except('a', {}, {'a': order_response.recv()})
-                                        
-                                        #if update is from order execution, log response (dont care about other account updates on this stream)
-                                        if order_result_raw['e'] == 'executionReport':
-                                            order_result = autotrader._order_stream_data_process(order_result_raw, datastream='Type2')
-                                            if order_result:
-                                                order.order['status'] = order_result['status']
-                                            else:
-                                                continue
+                    for trading_pair in orders:
+                        # autotrader.balance = autotrader.kl_socket.balance
+                        order_result[trading_pair] = orders[trading_pair].order
+                        order_result[trading_pair]['status'] = None
+                        if orders[trading_pair].order['side'] in ['BUY', 'SELL']:# and orders[trading_pair].alive():
+                            # print('3')
+                            if autotrader.kl_socket.bal_update_flag[trading_pair] == True:
+                                autotrader.kl_socket.current_pair_buffer.append(trading_pair)
+                                order_result[trading_pair] = await autotrader.place_order(**orders[trading_pair].order)
+                                autotrader.kl_socket.bal_update_flag[trading_pair] = False
+                            # print('4')
+                            if order_result[trading_pair]:
+                                # print(order_result[trading_pair])
+                                orders[trading_pair].order['status'] = order_result[trading_pair]['status']
+                            else:
+                                print('Error placing order.')
+                                '''
+                                # TODO: DO WE ACTUALLY CARE ABOUT PARTIAL ORDERS? - NOT REALLY
+                                if orders[trading_pair].alive():
+                                    order_result_raw = await autotrader._server_connect_try_except('a', {}, {'a': order_response.recv()})
+                                    #if update is from order execution, log response (dont care about other account updates on this stream)
+                                    if order_result_raw['e'] == 'executionReport':
+                                        order_result = autotrader._order_stream_data_process(order_result_raw, datastream='Type2')
+                                        if order_result:
+                                            order.order['status'] = order_result['status']
+                                        else:
+                                            continue
                                         last_order_status = order_result['status']
-                                        print(last_order_status)
-                                    #if order open longer than 1h, cancel    
-                                    else:
-                                        order_result = await autotrader.async_client.cancel_order(symbol=order.order['symbol'] ,orderId=order.order['orderId'], recvWindow=10000)
-                                        order_result['time'] = autotrader.data['open_time'].values[-1]
-                                        order_result['quantity'] = 0.0
-                                        order_result['commission'] = 0.0
-             
-                                #update wallet balance
-                                if (await autotrader._balance_update() == False):
-                                    print('balance update false')
-                        '''
-                    autotrader.log_data(kl_socket.indicators, order_result)
+                                '''
+                        # else:
+                            # order_result[trading_pair]['status'] = None
+                        
+                    # if (await autotrader._balance_update() == False):
+                        # print('balance update false')
+                    autotrader.log_data(autotrader.kl_socket.indicators, order_result)
         except KeyboardInterrupt:  # if Ctrl+C or IDE stopped - doesn't seem to trigger if program is interrupted in a sub task
             print('Program interrupted.')
             return
