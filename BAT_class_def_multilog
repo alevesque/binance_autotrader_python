@@ -12,7 +12,7 @@ import copy
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', RuntimeWarning)
 from unicorn_binance_websocket_api import BinanceWebSocketApiManager
-import json
+import decimal
 
 class BinanceTrader:
 
@@ -21,7 +21,7 @@ class BinanceTrader:
         self.exchangeinfo = []
         self.async_client = None
         self.bm = None
-        self.trade_manager = None
+        self.usr_socket = None
 
         self.order_stop_trail = {}
         self.order_sell_high = {}
@@ -32,10 +32,10 @@ class BinanceTrader:
         self.klines = {}
         self.kline_messages = {}
         self.COMM_RATE = 0.001
-        self.buy_price = 0
-        self.buy_time = 0
-        self.buy_comm = 0
-        self.buy_size = 0
+        self.buy_price = {}
+        self.buy_time = {}
+        self.buy_comm = {}
+        self.buy_size = {}
         pass
 
     async def initialize_trade_engine(self) -> bool:
@@ -46,7 +46,7 @@ class BinanceTrader:
 
         await self.get_exchange_info()
         await self._prelim_data_spool()
-
+        
         # initialize websockets for latest klines of each pair, interval
         # self.klines = {trading_pair: {interval: KlineSocketObject}}
         self.klines = {trading_pair:
@@ -57,19 +57,32 @@ class BinanceTrader:
                 )
                 for _interval in self.intervals}
             for trading_pair in self.exchangeinfo}
-
+        
+        
         self.kline_messages = {trading_pair:
                                    {_interval: None
                                     for _interval in self.intervals}
                                for trading_pair in self.exchangeinfo}
-
-        self.trade_manager = self.bm.user_socket()
+            
+        channels = {'kline_' + interv for interv in config.intervals}
+        markets = {trading_pair for trading_pair in self.exchangeinfo}
+        self.kl_socket = BinanceWs(channels=channels, markets=markets, spool=self.data)
+        # self.usr_socket = self.bm.user_socket()
         print('Sockets initialized.')
-        self.balance = {}
-        await self._balance_update()
-        print(self.balance)
+        
+        init_acc_result = await self._server_connect_try_except(
+            'self.async_client.get_account(recvWindow=10000)',
+            {},
+            {'self': self}
+        )
+        #update wallet balance
+        if(self.kl_socket.wallet_update(init_acc_result, response_type='Type1')):
+            # self.balance = self.kl_socket.balance
+            print(self.kl_socket.balance)
+        else:
+            print('Error updating wallet.')
         print('Initialization Complete.')
-        return self.data
+        return
 
     async def _initialize_exchange_connection(self) -> None:
         # initialize websocket client to livestream data one ping at a time. preferable to
@@ -90,21 +103,22 @@ class BinanceTrader:
         return
 
     async def _prelim_data_spool(self) -> bool:
-        init_data_raw_intervals = {}
+        
         # download initial data for the longer EMA timeframes, so calculations can start immediately
         # rather than spooling up hundreds of ticks of price data for EMA600, 400 etc
         for trading_pair in self.exchangeinfo:
+            self.data[trading_pair] = {}
             for _interval in self.intervals:
-                init_data_raw_intervals[_interval] = await self._server_connect_try_except(
+                self.data[trading_pair][_interval] = await self._server_connect_try_except(
                     "self.async_client.get_klines(symbol=trading_pair, " +
                     "interval=_interval, " +
                     "limit=601)",
                     {},
                     {'self': self, 'trading_pair': trading_pair, '_interval': _interval}
                 )
-                if init_data_raw_intervals[_interval]:
+                if self.data[trading_pair][_interval]:
                     # numpy array: [depth, rows, columns]
-                    init_data_raw_intervals[_interval] = pd.DataFrame(np.array(init_data_raw_intervals[_interval])[:,0:6],
+                    self.data[trading_pair][_interval] = pd.DataFrame(np.array(self.data[trading_pair][_interval])[:,0:6],
                                                                       columns=['open_time', 'open', 'high', 'low', 'close', 'volume'],
                                                                       dtype='float64')
                     print('Initial data loaded - {} {}'.format(trading_pair, _interval))
@@ -112,31 +126,9 @@ class BinanceTrader:
                     print('Error spooling {} {}'.format(trading_pair, _interval))
                     return False
             # self.data is in form {pair: {interval: pd.DataFrame}}
-            self.data[trading_pair] = init_data_raw_intervals
+            # print('init spool for {}'.format(trading_pair))
+            # print(self.data[trading_pair])
         return
-
-    # update wallet values with latest balances
-    async def _balance_update(self) -> bool:
-        ''' sets self.balance to dict of form:
-            {
-                'BNB': 1000.00,
-                'XLM': 900000.00,
-                }'''
-        #get account info for balance checking
-        acc_result = await self._server_connect_try_except(
-            'self.async_client.get_account(recvWindow=10000)',
-            {},
-            {'self': self}
-        )
-        if 'balances' in acc_result:
-            wallet_pair_list = [pair for pair in config.balance]  # TODO may be meaninglessly restrictive, why does config need a list of assets?
-            for bal in acc_result['balances']:
-                if bal['asset'] in wallet_pair_list:
-                    self.balance[bal['asset']] = float(bal['free'])
-            return True
-        else:
-            print('No balances in Account!')
-            return False
 
     async def _server_connect_try_except(self, *args):
         try:
@@ -159,7 +151,7 @@ class BinanceTrader:
         else:
             return conn_result
 
-    def _order_stream_data_process(self, order_result_raw: dict, datastream: str) -> dict:
+    def _order_stream_data_process(self, order_result_raw: dict, order_name: str, datastream: str) -> dict:
         order_result = {}
         if order_result_raw:
             if datastream == 'Type1':
@@ -177,8 +169,9 @@ class BinanceTrader:
                 order_result['time'] = float(order_result.pop('transactTime'))
                 order_result['price'] = float(order_result.pop('price'))
                 order_result['commission'] = cumulative_comm
+                order_result['name'] = order_name
                 if order_result['side'] == 'BUY' and order_result['status'] == 'FILLED':
-                    self.buy_comm = cumulative_comm
+                    self.buy_comm[order_result['symbol']] = cumulative_comm
 
             elif datastream == 'Type2':
                 order_result = {
@@ -216,59 +209,62 @@ class BinanceTrader:
 
     def log_data(self, indicators: dict, order_result: dict) -> bool:
         for trading_pair in self.exchangeinfo:
-            if not indicators.get(trading_pair):
-                break
-            for interval in self.intervals:
-                if not indicators[trading_pair].get(interval):
-                    break
-                dt = datetime.datetime.fromtimestamp(indicators[trading_pair][interval][1]['time']/1000)
-                # if an order is currently active, log relevant info to console
-                # otherwise log indicators
-                if order_result[trading_pair].order['status']:
+            if order_result.get(trading_pair):
+                if order_result[trading_pair].get('status'):
+                    dt = datetime.datetime.fromtimestamp(order_result[trading_pair]['time']/1000)
                     #prevent div by zero error on initial iteration - gain % will be wrong but wgaf
-                    if self.buy_price == 0.0 or self.buy_size == 0.0:
-                        self.buy_size = 1.0
-                        self.buy_price = 1.0
+                    if self.buy_price[trading_pair] == 0.0 or self.buy_size[trading_pair] == 0.0:
+                        self.buy_size[trading_pair] = 1.0
+                        self.buy_price[trading_pair] = 1.0
                     output = (
-                            f"OrderID: {order_result[trading_pair].order['orderId']:3d} " +
-                            f"Type: {order_result[trading_pair].order['symbol']:<2} " +
-                            f"{order_result[trading_pair].order['type']:<2} " +
-                            f"{order_result[trading_pair].order['name']:<2} ".ljust(5) +
+                            f"OrderID: {order_result[trading_pair]['orderId']:3d} " +
+                            f"{order_result[trading_pair]['symbol']:<2} " +
+                            f"{order_result[trading_pair]['type']:<6} " +
+                            f"{order_result[trading_pair]['name']:<6} ".ljust(5) +
                             "Status: " +
-                            f"{order_result[trading_pair].order['status']:1} ".ljust(17) +
+                            f"{order_result[trading_pair]['status']:1} ".ljust(17) +
                             "Size: ".ljust(6) +
-                            f"{order_result[trading_pair].order['quantity']:6.2f} ".rjust(8) +
-                            f"Price: {order_result[trading_pair].order['price']:6.4f} " +
-                            f"Cost: {order_result[trading_pair].order['quantity']*order_result[trading_pair].order['price']:6.2f} " +
-                            f"Comm: {order_result[trading_pair].order['commission']:4.2f} "
+                            f"{order_result[trading_pair]['quantity']:6.2f} ".rjust(8) +
+                            f"Price: {order_result[trading_pair]['price']:6.4f} " +
+                            f"Cost: {order_result[trading_pair]['quantity']*order_result[trading_pair]['price']:6.2f} " +
+                            f"Comm: {order_result[trading_pair]['commission']:4.2f} "
                     )
 
-                    if order_result[trading_pair].order['status'] == "FILLED":
-                        if order_result[trading_pair].order['side'] == 'SELL':
-                            profit = (order_result[trading_pair].order['price']-self.buy_price)*order_result[trading_pair].order['quantity']
-                            loss = order_result[trading_pair].order['commission'] + self.buy_comm
-                            initial_buy_cost = self.buy_size*self.buy_price
+                    if order_result[trading_pair]['status'] == "FILLED":
+                        if order_result[trading_pair]['side'] == 'SELL':
+                            profit = (order_result[trading_pair]['price']-self.buy_price[trading_pair])*order_result[trading_pair]['quantity']
+                            loss = order_result[trading_pair]['commission'] + self.buy_comm[trading_pair]
+                            initial_buy_cost = self.buy_size[trading_pair]*self.buy_price[trading_pair]
                             output += (
                                     f"gain: {(profit - loss):4.2f} " +
                                     f"gain%: {100*(profit - loss)/initial_buy_cost:3.2f}% "
                             )
                         else:
                             print("\a")
-                        f = open("tradelog.txt", "a")
-                        f.write('%s, %.8s, %s \n' % (dt.date().isoformat(), dt.time(), output))
-                        f.close()
-
+                        # f = open("tradelog.txt", "a")
+                        # f.write('%s, %.8s, %s \n' % (dt.date().isoformat(), dt.time(), output))
+                        # f.close()
+                    print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(), output))
                 else:
-                    output = (
-                            f"{trading_pair}: {interval} " +
-                            f"RSI6: {indicators[trading_pair][interval][1]['RSI6']:7.4f} " +
-                            f"RSI50: {indicators[trading_pair][interval][1]['RSI50']:7.4f} " +
-                            f"BB-Upper: {indicators[trading_pair][interval][1]['bband_upper']:6.4f} " +
-                            f"BB-Middle: {indicators[trading_pair][interval][1]['bband_middle']:6.4f} " +
-                            f"BB-Lower: {indicators[trading_pair][interval][1]['bband_lower']:6.4f} " +
-                            f"Close Price: {indicators[trading_pair][interval][1]['close_price']:6.4f} "
-                    )
-                print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(), output))
+                    pass
+                    '''if not indicators.get(trading_pair):
+                        break
+                    for interval in self.intervals:
+                        if not indicators[trading_pair].get(interval):
+                            break  
+                        dt = datetime.datetime.fromtimestamp(indicators[trading_pair][interval][1]['time']/1000)
+                        # if an order is currently active, log relevant info to console
+                        # otherwise log indicators
+                        output = (
+                                f"{trading_pair}: {interval} " +
+                                f"RSI6: {indicators[trading_pair][interval][1]['RSI6']:7.4f} " +
+                                f"RSI50: {indicators[trading_pair][interval][1]['RSI50']:7.4f} " +
+                                f"BB-Upper: {indicators[trading_pair][interval][1]['bband_upper']:6.4f} " +
+                                f"BB-Middle: {indicators[trading_pair][interval][1]['bband_middle']:6.4f} " +
+                                f"BB-Lower: {indicators[trading_pair][interval][1]['bband_lower']:6.4f} " +
+                                f"Close Price: {indicators[trading_pair][interval][1]['close_price']:6.4f} "
+                        )
+                        print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(), output))'''
 
         return
 
@@ -311,8 +307,13 @@ class BinanceTrader:
                                       if p['symbol'] in assets
                                       ]
                                  )}
-            # print(self.exchangeinfo)
+            # print(self.exchangeinfo['LTCBUSD'])
             self._set_max_min_trade_qty()
+            self.buy_price = {pair: 0 for pair in self.exchangeinfo}
+            self.buy_time = {pair: 0 for pair in self.exchangeinfo}
+            self.buy_comm = {pair: 0 for pair in self.exchangeinfo}
+            self.buy_size = {pair: 0 for pair in self.exchangeinfo}
+            # print(self.exchangeinfo)
         return
 
     def _set_max_min_trade_qty(self) -> None:
@@ -362,43 +363,116 @@ class BinanceTrader:
         }
         # IPython.display.display(self.trade_qty_limits)
         pass
+    
+    def round_decimal(self, decimal_number: float, base: str, rounding=decimal.ROUND_DOWN) -> float:
+        """
+        Round decimal number to the nearest base
 
+        :param decimal_number: decimal number to round to the nearest base
+        :type decimal_number: Decimal
+        :param base: rounding base, e.g. 5, Decimal('0.05')
+        :type base: int or Decimal
+        :param rounding: Decimal rounding type
+        :rtype: Decimal
+        """
+        decimal_number = decimal.Decimal(decimal_number)
+        base = decimal.Decimal(base)
+        return base * (decimal_number / base).quantize(1, rounding=rounding)
+    
     def setup_order_options(self, pair: str, base_asset_bal: float, quote_asset_bal: float, order_price: float, order_side: str = 'SELL', order_type: str = 'LIMIT', order_name: str = '', order_status: str = 'NEW', interval: str = '5m') -> dict:
+        """
+        Takes options and formats them and turns them into a dict.
+        Parameters
+        ----------
+        pair : str
+            asset pair to be traded.
+        base_asset_bal : float
+            balance of base asset of trading pair.
+        quote_asset_bal : float
+            balance of quote asset of trading pair.
+        order_price : float
+            price at which to set order.
+        order_side : str, optional
+            BUY or SELL. The default is 'SELL'.
+        order_type : str, optional
+            MARKET or LIMIT. The default is 'LIMIT'.
+        order_name : str, optional
+            Optional name for order. The default is ''.
+        order_status : str, optional
+            NEW, PARTIAL, FILLED etc. The default is 'NEW'.
+        interval : str, optional
+            5m, 15m, 1h, etc. The default is '5m'.
+
+        Returns
+        -------
+        dict
+            Dict of order options to be passed to Order.set.
+
+        """
         order_options = copy.deepcopy(config.order_opts)
         order_options['symbol'] = pair
-        order_options['price'] = order_price
+        # a = self.round_decimal(order_price, self.exchangeinfo[pair]['filters'][0]['tickSize'])
+        # print(a)
+        order_options['price'] = float("{0:.{1}f}".format(order_price, self.exchangeinfo[pair]['baseAssetPrecision']))
+        # print(order_options['price'])
         order_options['type'] = order_type
         order_options['name'] = order_name
         order_options['side'] = order_side
         order_options['status'] = order_status
         if order_side == 'BUY':
-            self.buy_price = order_options['price']
-            self.buy_size = 1  # TODO reset when not in testnet # float("{:.0f}".format(0.98*quote_asset_bal/self.data['close'].values[-1]))
-            if self.buy_size > self.trade_qty_limits[pair][order_side][order_type]['MAX']:
-                self.buy_size = self.trade_qty_limits[pair][order_side][order_type]['MAX']
-            order_options['quantity'] = self.buy_size
-            self.buy_time = time.time()
+            self.buy_price[pair] = order_options['price']
+            # print('buy price - {}: {}'.format(pair, self.buy_price[pair]))
+            self.buy_size[pair] = 1  # TODO reset when not in testnet # float("{:.0f}".format(0.98*quote_asset_bal/self.data['close'].values[-1]))
+            if self.buy_size[pair] > self.trade_qty_limits[pair][order_side][order_type]['MAX']:
+                self.buy_size[pair] = self.trade_qty_limits[pair][order_side][order_type]['MAX']
+            order_options['quantity'] = self.buy_size[pair]
+            self.buy_time[pair] = time.time()
 
         elif order_side == 'SELL':
             if base_asset_bal > self.trade_qty_limits[pair][order_side][order_type]['MAX']:
                 base_asset_bal = self.trade_qty_limits[pair][order_side][order_type]['MAX']
-            # reset bal when test to self.buy_size
+            # reset bal when test to self.buy_size[pair]
             order_options['quantity'] = float("{0:.{1}f}".format(base_asset_bal, self.exchangeinfo[pair]['baseAssetPrecision']))
         return order_options
 
-    ##################################################################
-    # BUY LOGIC
-    # Takes indicators and returns True/False if conditions are met or not
-    ##################################################################
-    def buy_logic(self, indicators: dict) -> bool:
-        ######### TODO: INSERT BUY CONDITIONS HERE ##########
-        return True
+    def buy_logic(self, indicators: dict, trading_pair: str) -> bool:
+        """
+        Takes indicators and returns True/False if conditions are met or not  
 
-    ##################################################################
-    # SELL LOGIC
-    # Takes indicators and returns True/False if conditions are met or not
-    ##################################################################
+        Parameters
+        ----------
+        indicators : dict
+            Dict of lists of trading indicator data for the given pair (e.g. RSI, MACD, etc).
+            indicators[INDICATOR][0] is the penultimate value, and [1] is the latest.
+
+        Returns
+        -------
+        bool
+            Buy? T/F.
+
+        """
+        ######### TODO: INSERT BUY CONDITIONS HERE ##########
+        if indicators[trading_pair]['5m'][1]['RSI6'] < 10:
+            return True
+        else:
+            return False
+
     def sell_logic(self, indicators: dict) -> bool:
+        """
+        Takes indicators and returns True/False if conditions are met or not
+
+        Parameters
+        ----------
+        indicators : dict
+            Dict of lists of trading indicator data for the given pair (e.g. RSI, MACD, etc).
+            indicators[INDICATOR][0] is the penultimate value, and [1] is the latest.
+
+        Returns
+        -------
+        bool
+            Sell? T/F..
+
+        """
         ############# TODO: INSERT CONDITIONS HERE ##############
         return True
 
@@ -414,116 +488,131 @@ class BinanceTraderWIP(BinanceTrader):
     # Determines if it's the right time, then sets up orders with
     # appropriate parameters.
     ##################################################################
-    def trading_strategy(self, indicators: dict, current_data: dict) -> dict(Order):
+    async def trading_strategy(self, indicators: dict, current_data: dict) -> dict(Order):
         order_type_buy = 'MARKET'
         order_type_sell = 'LIMIT'
-        order = {}
+        orders = {}
+        shared_order_vars = {}
         for trading_pair in self.exchangeinfo:
-            print(f'order conditions check for: {trading_pair}')
-            shared_order_vars = {
+            if not indicators[trading_pair][self.intervals[1]]:
+                # print('No indicators for {}, break.'.format(trading_pair))
+                break
+            # print(f'order conditions check for: {trading_pair}')
+            shared_order_vars[trading_pair] = {
                 'pair': trading_pair,
-                'base_asset_bal': self.balance[config.trading_pairs[trading_pair]['baseAsset']],
-                'quote_asset_bal': self.balance[config.trading_pairs[trading_pair]['quoteAsset']],
-                'order_price': float("{:.4f}".format(current_data[trading_pair][self.intervals[0]]['close'].values[-1])),
+                'base_asset_bal': self.kl_socket.balance[config.trading_pairs[trading_pair]['baseAsset']],
+                'quote_asset_bal': self.kl_socket.balance[config.trading_pairs[trading_pair]['quoteAsset']],
+                'order_price': float("{:.4f}".format(indicators[trading_pair][self.intervals[0]][1]['close_price'])),
             }
-            order[trading_pair] = Order()
+            order_setup_opts = {'ticksize': self.exchangeinfo[trading_pair]['filters'][0]['tickSize']}
+            orders[trading_pair] = Order(**order_setup_opts)
             if not self.order_stop_trail.get(trading_pair):
-                self.order_stop_trail[trading_pair] = StopTrailOrder(trail_percent=0.02)
+                self.order_stop_trail[trading_pair] = StopTrailOrder(trail_percent=config.TRAIL_PERCENT, **order_setup_opts)
             if not self.order_sell_high.get(trading_pair):
-                self.order_sell_high[trading_pair] = Order()
+                self.order_sell_high[trading_pair] = Order(**order_setup_opts)
             if not self.order_buy.get(trading_pair):
-                self.order_buy[trading_pair] = Order()
+                self.order_buy[trading_pair] = Order(**order_setup_opts)
             #####################
             # BUYING CONDITIONS #
             #####################
-            if shared_order_vars['base_asset_bal'] <= self.trade_qty_limits[trading_pair]['BUY'][order_type_buy]['MIN']:  # TODO reset when live to bal<minpos
-                # print('Buy cond 1: T')
-                # print(self.order_buy.order)
-                if not self.order_buy[trading_pair].alive():
+            '''print('\n indicators')
+            print(indicators[trading_pair])
+            print('\n end indicators')'''
+            if not self.order_buy[trading_pair].alive():
+                # print('Buy cond 1: T - {}'.format(trading_pair))
+                if shared_order_vars[trading_pair]['base_asset_bal'] <= self.trade_qty_limits[trading_pair]['BUY'][order_type_buy]['MIN']:  # TODO reset when live to bal<minpos
                     # print('buy cond 2: T')
-                    if self.buy_logic(indicators):
+                    if self.buy_logic(indicators, trading_pair):
                         # print('3')
                         order_opts = self.setup_order_options(
                             order_side='BUY',
                             order_type=order_type_buy,  # TODO del when not in testnet
                             order_name='Buy',
-                            **shared_order_vars
+                            **shared_order_vars[trading_pair]
                         )
                         # print('4')
                         self.order_buy[trading_pair].set(**order_opts)
                         # print('buy order set')
-                        # print(self.order_buy.order)
+                        # print(self.order_buy[trading_pair].order)
                 # if we are in buying mode, set return order to order_buy
                 # sets to either the existing order or to the newly set options
-                order[trading_pair] = self.order_buy[trading_pair]
-
+                orders[trading_pair] = self.order_buy[trading_pair]
+            # if it has been more than an hour (+3600), cancel order
+            
+            elif self.buy_time[trading_pair]/1000 < indicators[trading_pair][self.intervals[0]][1]['time']/1000+30:
+                if(await self.order_buy[trading_pair].cancel(self)):
+                    self.order_buy[trading_pair].order['status'] = 'EXPIRED'
+                    orders[trading_pair] = self.order_buy[trading_pair]
+            else:
+                orders[trading_pair] = self.order_buy[trading_pair]
             ######################
             # SELLING CONDITIONS #
             ######################
             # if we have above the min balance for selling
-            elif shared_order_vars['base_asset_bal'] >= self.trade_qty_limits[trading_pair]['SELL'][order_type_sell]['MIN']:  # comment out bal >= minpossell when test
-                print('sell mode')
+            if shared_order_vars[trading_pair]['base_asset_bal'] > self.trade_qty_limits[trading_pair]['SELL'][order_type_sell]['MIN']:  # comment out bal >= minpossell when test
+                # print('sell mode - {}'.format(trading_pair))
                 if not self.order_sell_high[trading_pair].alive():
-                    print('sell high dead')
+                    # print('sell high dead')
                     if self.order_stop_trail[trading_pair].alive():
                         # only stoptrail is open
-                        print('stop trail alive')
-                        if self.order_stop_trail[trading_pair].check(shared_order_vars['order_price']):
+                        # print('stop trail alive')
+                        if self.order_stop_trail[trading_pair].check(shared_order_vars[trading_pair]['order_price']):
                             # if stop trail hit the stop price
-                            # sell - just pass order to return
-                            order[trading_pair] = self.order_stop_trail[trading_pair]
+                            orders[trading_pair] = self.order_stop_trail[trading_pair]
                         # if sell conditions are good, sell for profit
                         elif self.sell_logic(indicators):
-                            print('sell high')
+                            # print('sell high')
                             order_opts = self.setup_order_options(
                                 order_name='SellHigh',
-                                **shared_order_vars)
-                            if self.order_stop_trail[trading_pair].cancel(self.async_client):
+                                **shared_order_vars[trading_pair])
+                            if await self.order_stop_trail[trading_pair].cancel(self):
                                 self.order_sell_high[trading_pair].set(**order_opts)
-                                order[trading_pair] = self.order_sell_high[trading_pair]
+                                orders[trading_pair] = self.order_sell_high[trading_pair]
                             else:
-                                print('Error cancelling StopTrailOrder')
+                                print('Error cancelling StopTrailOrder: 1')
                                 # set status or other flag to tell main() 
                                 # that it wasnt successful and to not pass order to next function
                                 self.order_stop_trail[trading_pair].order['side'] = None
-                                order[trading_pair] = self.order_stop_trail[trading_pair]
+                                orders[trading_pair] = self.order_stop_trail[trading_pair]
                                 
                         else:
                             # if it didnt hit the stop price and sell_logic() is not indicating a profit sell
                             # cancel old order
-                            if self.order_stop_trail[trading_pair].cancel(self.async_client):
+                            if await self.order_stop_trail[trading_pair].cancel(self):
                                 # set new order with same details as previous order
                                 # (order_price already updated with .check() above)
                                 self.order_stop_trail[trading_pair].order['status'] = 'NEW'
-                                order[trading_pair] = self.order_stop_trail[trading_pair]
+                                orders[trading_pair] = self.order_stop_trail[trading_pair]
                             else:
-                                print('Error cancelling StopTrailOrder')
+                                print('Error cancelling StopTrailOrder: 2')
                                 # set status or other flag to tell main() 
                                 # that it wasnt successful and to not pass order to next function
                                 self.order_stop_trail[trading_pair].order['side'] = None
-                                order[trading_pair] = self.order_stop_trail[trading_pair]
+                                orders[trading_pair] = self.order_stop_trail[trading_pair]
                     else:
-                        print('stop trail dead')
+                        # print('stop trail dead')
                         # if both sell orders are closed, set trailstop
                         order_opts = self.setup_order_options(
                             order_type=order_type_sell,
-                            order_name='StopTrail',
-                            **shared_order_vars
+                            order_name='StopTrail Sell',
+                            **shared_order_vars[trading_pair]
                         )
                         self.order_stop_trail[trading_pair].set(**order_opts)
-                        order[trading_pair] = self.order_stop_trail[trading_pair]
-                        print('stoptrail set')
-                        print(self.order_stop_trail[trading_pair].order)
-                    print(f"stoptrail sell, status: {self.order_stop_trail[trading_pair].order['status']}")
+                        # fix ticksize of price that was modified by StopTrailOrder.check()
+                        orders[trading_pair] = self.order_stop_trail[trading_pair]
+                        # print('stoptrail set')
+                        # print(self.order_stop_trail[trading_pair].order)
+                    # print(f"stoptrail sell, status: {self.order_stop_trail[trading_pair].order['status']}")
                 else:
                     # if in sell mode and order_sell_high is open,
                     # TODO check if time limit reached - implement duration check into Order class
                     # if so, cancel sell high
                     # else return existing order_sell_high order
-                    order[trading_pair] = self.order_sell_high[trading_pair]
+                    orders[trading_pair] = self.order_sell_high[trading_pair]
                     pass
-        print('done trading strategy')
-        return order
+        # print('done trading strategy')
+        # print(orders)
+        return orders
 
     ##################################################################
     # PLACE ORDER
@@ -536,6 +625,8 @@ class BinanceTraderWIP(BinanceTrader):
         if order_params['type']=='MARKET':
             del order_params['timeInForce']
             del order_params['price']
+            
+        
 
         # remove extra order params that are useful as part of Order object
         # but are not proper arguments to pass to the api
@@ -563,36 +654,55 @@ class BinanceTraderWIP(BinanceTrader):
             {'order_p': order_parameters, 'self': self}
         )
         if order_result_raw:
-            order_result = self._order_stream_data_process(order_result_raw, datastream='Type1')
+            order_result = self._order_stream_data_process(order_result_raw, order_params['name'], datastream='Type1')
         else:
             order_result = {}
         return order_result
-
+    
 
 class BinanceWs:
 
     def __init__(self, channels, markets, spool):
         self.binance_websocket_api_manager = BinanceWebSocketApiManager(exchange="binance.com-testnet")
-        self.stream = self.binance_websocket_api_manager.create_stream(channels, markets)
-        self.data = spool 
+        self.stream = self.binance_websocket_api_manager.create_stream(channels, 
+                                                                       markets,
+                                                                       output="UnicornFy")
+        self.balance = {}
+        self.usr_stream = self.binance_websocket_api_manager.create_stream('arr', 
+                                                                           '!userData',
+                                                                           api_key=config.API_KEY, 
+                                                                           api_secret=config.API_SECRET,
+                                                                           output="UnicornFy")
+        
+        self.data = spool
         self.indicators = {trading_pair:
                                    {_interval[6:]: None
                                     for _interval in channels}
                                for trading_pair in markets}
-        
+        # print(channels, markets)
         self.channel_dir = {channel: channel[6:] for channel in channels}
+        self.bal_update_flag = {trading_pair: True for trading_pair in markets}
+        self.current_pair_buffer = []
         
     async def run(self):
         received_stream_data_json = self.binance_websocket_api_manager.pop_stream_data_from_stream_buffer()
         if received_stream_data_json:
-            json_data = json.loads(received_stream_data_json)
-            candle_data = json_data.get('data', {})
+            json_data = received_stream_data_json# json.loads(received_stream_data_json)
+            candle_data = json_data.get('kline', {})
             if candle_data:
-                candle = candle_data.get('k', {})
-                symbol = candle.get('s', {})
-                timeframe = candle.get('i', {})
+                # print(received_stream_data_json)
+                # candle = candle_data.get('kline', {})
+                symbol = candle_data.get('symbol', {})
+                timeframe = candle_data.get('interval', {})
                 self._process_raw_klines(candle_data, symbol, timeframe)
                 self.indicators[symbol][timeframe] = self._indicator_data(symbol, timeframe)
+                # print(symbol, timeframe)
+                # print(self.indicators[symbol][timeframe])
+            if json_data.get('event_type') == 'outboundAccountPosition':
+                self.wallet_update(json_data)
+            # worker_thread = threading.Thread(target=self._balance_update)
+            # worker_thread.start()
+        
 
     ##################################################################
     # PROCESS RAW KLINES
@@ -604,14 +714,14 @@ class BinanceWs:
         # take only relevant data (OHLC, volume)
         # convert to float64 so talib doesn't bitch
         new_data = pd.DataFrame([{
-            'open_time': new_data_raw['k']['t'],
-            'open': new_data_raw['k']['o'],
-            'high': new_data_raw['k']['h'],
-            'low': new_data_raw['k']['l'],
-            'close': new_data_raw['k']['c'],
-            'volume': new_data_raw['k']['v'],
+            'open_time': new_data_raw['kline_start_time'],
+            'open': new_data_raw['open_price'],
+            'high': new_data_raw['high_price'],
+            'low': new_data_raw['low_price'],
+            'close': new_data_raw['close_price'],
+            'volume': new_data_raw['base_volume'],
         }]).astype('float64')
-
+        
         #add new data tick onto existing data set and remove the 0th line
         # to avoid dataset getting huge and overwhelming memory. keep only
         # what is needed for biggest indicator. i.e. 600 lines for EMA600
@@ -636,7 +746,6 @@ class BinanceWs:
         # range(2) because we want both the ultimate and penultimate values
         for i in range(2):
             indicators_per_pair_and_interval[i] = {
-                
                 'close_price': CLOSE_PRICE.values[i-2],
                 'time': _TIME.values[i-2],
                 'RSI6': RSI6[i-2],
@@ -644,19 +753,48 @@ class BinanceWs:
                 'bband_upper': bband_upper[i-2],
                 'bband_middle': bband_middle[i-2],
                 'bband_lower': bband_lower[i-2],
-                
-
             }
         return indicators_per_pair_and_interval
     
+    def wallet_update(self, acc_result: dict, response_type: str = 'Type2') -> bool:
+        ''' sets self.balance to dict of form:
+            {
+                'BNB': 1000.00,
+                'XLM': 900000.00,
+                }'''
+        if response_type == 'Type1':
+            if 'balances' in acc_result:
+                wallet_pair_list = [pair for pair in config.balance]  # TODO may be meaninglessly restrictive, why does config need a list of assets?
+                for bal in acc_result['balances']:
+                    if bal['asset'] in wallet_pair_list:
+                        self.balance[bal['asset']] = float(bal['free'])
+                print(self.balance)
+                # self.bal_update_flag = True
+                return True
+            else:
+                print('No balances in Account!')
+                return False
+        else:
+            if acc_result.get('event_type') == 'outboundAccountPosition':
+                wallet_pair_list = [pair for pair in config.balance]  # TODO may be meaninglessly restrictive, why does config need a list of assets?
+                for bal in acc_result.get('balances'):
+                    if bal.get('asset') in wallet_pair_list:
+                        self.balance[bal['asset']] = float(bal.get('free'))
+                print(self.balance)
+                self.bal_update_flag[self.current_pair_buffer.pop(0)] = True
+                return True
+    
 class Order():
-    def __init__(self):
+    def __init__(self, ticksize='0.01'):
+        self.ticksize = ticksize
         self.order = {}
         self.reset()
 
     def set(self, **kwargs):
         for kw in kwargs:
             self.order[kw] = kwargs[kw]
+            if kw == 'price':
+                self.order[kw] = self.round_decimal(kwargs[kw], self.ticksize)
 
     def reset(self):
         self.order.clear()
@@ -683,28 +821,45 @@ class Order():
         pass
 
     async def cancel(self, trader):
+        print('cancel params: \n\t{}\n\t{}'.format(self.order['symbol'], self.order['orderId']))
         if (await trader._server_connect_try_except(
-            "trader.cancel_order(" +
+            "asy_client.cancel_order(" +
             "symbol=self.order['symbol']," +
             "order_Id=self.order['orderId'])",
             {},
-            {'trader': trader, 'self': self}
+            {'self': self, 'asy_client': trader.async_client}
             )):
             return True
         else:
             return False
+        
+    def round_decimal(self, decimal_number: float, base: str, rounding=decimal.ROUND_DOWN) -> float:
+        """
+        Round decimal number to the nearest base
+
+        :param decimal_number: decimal number to round to the nearest base
+        :type decimal_number: Decimal
+        :param base: rounding base, e.g. 5, Decimal('0.05')
+        :type base: int or Decimal
+        :param rounding: Decimal rounding type
+        :rtype: Decimal
+        """
+        decimal_number = decimal.Decimal(decimal_number)
+        base = decimal.Decimal(base)
+        return float(base * (decimal_number / base).quantize(1, rounding=rounding))
 
 
 class StopTrailOrder(Order):
-    def __init__(self, trail_percent):
+    def __init__(self, trail_percent=0.01, ticksize='0.01'):
         self.trail_percent = float(trail_percent)
-        Order.__init__(self)
+        Order.__init__(self, ticksize=ticksize)
     
     def set(self, **kwargs):
         for kw in kwargs:
             self.order[kw] = kwargs[kw]
             if kw == 'price':
                 self.order[kw] -= float(kwargs[kw])*self.trail_percent
+                self.order[kw] = self.round_decimal(self.order[kw], self.ticksize)
     
     def check(self, price: float) -> bool:
         if price <= self.order['price']:
