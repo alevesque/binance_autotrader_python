@@ -8,6 +8,8 @@ Created on Tue Mar 14 15:11:08 2023
 #fee can be reduced by extensive BNB holdings, high monthly trade volume (USD), or 25% discount for paying fees with BNB. see https://www.binance.us/en/fee/schedule
 fee = 0.001
 
+TRAIL_PERCENT = 0.02
+
 use_testnet = True
 reset_orders = True
 
