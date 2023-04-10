@@ -1,15 +1,8 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Mar 23 08:07:32 2023
-
-@author: alevesque
-"""
-
 from __future__ import annotations
 import time
 import asyncio
 import warnings
-from binance_trader_class_def_unicorn_multilogging import BinanceTraderWIP, BinanceWs
+from BAT_class_def_multilog import BinanceTraderWIP
 import config
 import nest_asyncio
 with warnings.catch_warnings():
@@ -17,36 +10,38 @@ with warnings.catch_warnings():
 
 
 async def main() -> None:
-    
-    autotrader = BinanceTraderWIP(intervs=[interv for interv in config.intervals])
-    
+    autotrader = BinanceTraderWIP()
     while True:  # continue running contents as long as no KeyboardInterrupt
-        # start time of loop, so can reconnect before server ~24h timeout
-        start_time = time.time()
-        # connect to exchange server, setup websockets, trade manager, client
-        await autotrader.initialize_trade_engine()
-        
         try:
+            # start time of loop, so can reconnect before server ~24h timeout
+            start_time = time.time()
+            # connect to exchange server, setup websockets, trade manager, client
+            if not await autotrader.initialize_trade_engine():
+                print('Error initializing trade engine')
+                break
             # if it has been more than x hours, restart loop to reconnect
             # and avoid server timeout
             while time.time() < start_time+3600*20:
+                print('1')
                 await autotrader.kl_socket.run()
-                # print(autotrader.kl_socket.bal_update_flag)
-                # if autotrader.kl_socket.bal_update_flag == True:
-                    # print('0')
-                
+                print('2')
                 orders = await autotrader.trading_strategy(autotrader.kl_socket.indicators, autotrader.kl_socket.data)
-              
+                print('3')
+
                 if orders:
+                    print('4')
                     order_result = {}
                     for trading_pair in orders:
                         # autotrader.balance = autotrader.kl_socket.balance
                         order_result[trading_pair] = orders[trading_pair].order
                         order_result[trading_pair]['status'] = None
-                        if orders[trading_pair].order['side'] in ['BUY', 'SELL']:# and orders[trading_pair].alive():
-                            # print('3')
-                            if autotrader.kl_socket.bal_update_flag[trading_pair] == True:
+                        if orders[trading_pair].alive():
+                            if autotrader.kl_socket.bal_update_flag[trading_pair] is True:
                                 autotrader.kl_socket.current_pair_buffer.append(trading_pair)
+                                if orders[trading_pair].order['name'] == 'SellHigh':
+                                    if autotrader.order_stop_trail[trading_pair].alive():
+                                        if await autotrader.order_stop_trail[trading_pair].cancel(autotrader) is False:
+                                            break
                                 order_result[trading_pair] = await autotrader.place_order(**orders[trading_pair].order)
                                 autotrader.kl_socket.bal_update_flag[trading_pair] = False
                             # print('4')
@@ -55,55 +50,44 @@ async def main() -> None:
                                 orders[trading_pair].order['status'] = order_result[trading_pair]['status']
                             else:
                                 print('Error placing order.')
-                                '''
-                                # TODO: DO WE ACTUALLY CARE ABOUT PARTIAL ORDERS? - NOT REALLY
-                                if orders[trading_pair].alive():
-                                    order_result_raw = await autotrader._server_connect_try_except('a', {}, {'a': order_response.recv()})
-                                    #if update is from order execution, log response (dont care about other account updates on this stream)
-                                    if order_result_raw['e'] == 'executionReport':
-                                        order_result = autotrader._order_stream_data_process(order_result_raw, datastream='Type2')
-                                        if order_result:
-                                            order.order['status'] = order_result['status']
-                                        else:
-                                            continue
-                                        last_order_status = order_result['status']
-                                '''
-                        # else:
-                            # order_result[trading_pair]['status'] = None
-                        
-                    # if (await autotrader._balance_update() == False):
-                        # print('balance update false')
+                        elif orders[trading_pair]['status'] == 'EXPIRED':
+                            if await orders[trading_pair].cancel(autotrader) is True:
+                                print(f"Order cancelled: {trading_pair} {orders[trading_pair].order['name']}")
+
                     autotrader.log_data(autotrader.kl_socket.indicators, order_result)
-        except KeyboardInterrupt:  # if Ctrl+C or IDE stopped - doesn't seem to trigger if program is interrupted in a sub task
+        except KeyboardInterrupt:
+            # if Ctrl+C or IDE stopped - doesn't seem to trigger if program is interrupted in a sub-task
             print('Program interrupted.')
-            return
         except RuntimeError:
             print('Runtime error.')
         except asyncio.CancelledError:  # triggers in linux not windows
             print('Program cancelled.')
-            return
         finally:
+            print('Closing connection...')
             await autotrader.async_client.close_connection()
+            print('Connection closed.')
+            return
 
 
 if __name__ == "__main__":
     nest_asyncio.apply()  # allows async functions to run in an IDE IPython console
     loop = asyncio.get_event_loop()  # create main asynchronous loop
-    try:
-        asyncio.run(main())  # run main()
-    except KeyboardInterrupt:  # if program stopped via IDE or Ctrl+C - triggers if program interrupted in sub task but not if in main loop
+    # try:  # TODO: try in windows without try except in this area and if it closes, then delete below
+    asyncio.run(main())  # run main()
+    '''except KeyboardInterrupt:
+        # if program stopped via IDE or Ctrl+C - triggers if program interrupted in sub-task but not if in main loop
         print('Keyboard Interrupt')
     except RuntimeError:
         print('runtime error')
-    finally:
-        # close out pending asynchronous tasks
-        print('Find all running tasks')
-        pending = asyncio.all_tasks(loop=loop)
-        for task in pending:
-            print(task.get_name())
-            task.cancel()
-        # all tasks closed, now stop loop and exit
-        if loop.is_running():
-            print('stop loop')
-            loop.stop()
-        print('Program stopped - exiting.')
+    finally:'''
+    # close out pending asynchronous tasks
+    print('Find all running tasks')
+    pending = asyncio.all_tasks(loop=loop)
+    for task in pending:
+        print(task.get_name())
+        task.cancel()
+    # all tasks closed, now stop loop and exit
+    if loop.is_running():
+        print('stop loop')
+        loop.stop()
+    print('Program stopped - exiting.')
