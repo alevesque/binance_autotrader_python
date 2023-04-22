@@ -592,13 +592,14 @@ class BinanceTraderWIP(BinanceTrader):
                     continue
                 else:
                     # if it didn't hit the stop price and sell_logic() is not indicating a profit sell
-                    # cancel old order
-                    # set new order with same details as previous order
-                    # (order_price already updated with .check() above)
-                    # TODO: need to signal to main script to cancel order while maintaining the new price setting
-                    # may need a class variable for each pair, basically to replace orders[trading_pair] in main script
-                    self.order_stop_trail[trading_pair].order['status'] = 'NEW'
+                    # set status to reissue_st to tell main function to cancel then reorder
+                    self.order_stop_trail[trading_pair].order['status'] = 'REISSUE_ST'
                     orders[trading_pair] = self.order_stop_trail[trading_pair]
+
+                    # TODO: need to signal to main script to cancel order while maintaining the new price setting
+                    # TODO: Done? run to check
+                    # may need a class variable for each pair, basically to replace orders[trading_pair] in main script
+
             else:
                 # if in sell mode and order_sell_high is open,
                 # TODO check if time limit reached - implement duration check into Order class?
@@ -658,6 +659,18 @@ class BinanceTraderWIP(BinanceTrader):
         else:
             order_result = {}
         return order_result
+
+    # set new order with same details as previous order
+    # (order_price already updated with .check() above)
+    async def reissue_stop_trail(self, trader, order_st):
+        # get current stop trail order details
+        order_params_old = order_st.order
+        # cancel current stop trail order
+        order_st.cancel(trader)
+        order_params_old['status'] = 'NEW'
+        # issue new order with the updated settings
+        self.place_order(order_params_old)
+        return
 
 
 class BinanceWs:
