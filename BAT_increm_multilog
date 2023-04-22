@@ -3,6 +3,7 @@ import time
 import asyncio
 import warnings
 from BAT_class_def_multilog import BinanceTraderWIP
+import copy
 import config
 import nest_asyncio
 with warnings.catch_warnings():
@@ -33,8 +34,15 @@ async def main() -> None:
                     order_result = {}
                     for trading_pair in orders:
                         # autotrader.balance = autotrader.kl_socket.balance
-                        order_result[trading_pair] = orders[trading_pair].order
+                        order_result[trading_pair] = copy.deepcopy(orders[trading_pair].order)
                         order_result[trading_pair]['status'] = None
+                        if orders[trading_pair]['status'] == 'REISSUE_ST':
+                            autotrader.reissue_stop_trail(autotrader, orders[trading_pair])
+                            continue
+                        if orders[trading_pair]['status'] == 'EXPIRED':
+                            if await orders[trading_pair].cancel(autotrader) is True:
+                                print(f"Order cancelled: {trading_pair} {orders[trading_pair].order['name']}")
+                            continue
                         if orders[trading_pair].alive():
                             if autotrader.kl_socket.bal_update_flag[trading_pair] is True:
                                 autotrader.kl_socket.current_pair_buffer.append(trading_pair)
@@ -50,9 +58,6 @@ async def main() -> None:
                                 orders[trading_pair].order['status'] = order_result[trading_pair]['status']
                             else:
                                 print('Error placing order.')
-                        elif orders[trading_pair]['status'] == 'EXPIRED':
-                            if await orders[trading_pair].cancel(autotrader) is True:
-                                print(f"Order cancelled: {trading_pair} {orders[trading_pair].order['name']}")
 
                     autotrader.log_data(autotrader.kl_socket.indicators, order_result)
         except KeyboardInterrupt:
