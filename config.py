@@ -15,8 +15,8 @@ reset_orders = True
 
 if use_testnet:
     #KEYS FOR TESTNET
-    API_KEY = "SAnwsmicA0Z35tMi4y4oIdbgVBzX6N6bLzEvUwcYDMXGk3XnUdEwN4NAFmNDy1aw"
-    API_SECRET = "558hkhICPOKwrwsFEAvy0mDuGwALcWwTjeaTFhemUEapfmQJNo7TczXbNWbsH1JK"
+    API_KEY = ""
+    API_SECRET = ""
 
     #WALLET ASSETS
     balance = {
@@ -31,8 +31,8 @@ if use_testnet:
     }
 else:
     #KEYS FOR REAL SERVER
-    API_KEY = "3dUerAA0KFYj9BPhLajkRdx3yxcxgSWqyayemilGsFft4lmyXc9iqyATO5D5xVDX"
-    API_SECRET = "8CgimgMn9JFajxCxfO49bAz1Sx8yGSxUuoCyg3Mix1i7SQlzXzuvBiWnVFBcBXAC"
+    API_KEY = ""
+    API_SECRET = ""
 
     #WALLET ASSETS
     balance = {
