@@ -23,42 +23,51 @@ async def main() -> None:
             # if it has been more than x hours, restart loop to reconnect
             # and avoid server timeout
             while time.time() < start_time+3600*20:
-                print('1')
+                # print('1')
                 await autotrader.kl_socket.run()
-                print('2')
-                orders = await autotrader.trading_strategy(autotrader.kl_socket.indicators, autotrader.kl_socket.data)
-                print('3')
+                # print('2')
+                orders = autotrader.trading_strategy(autotrader.kl_socket.indicators, autotrader.kl_socket.data)
+                # print('3')
 
                 if orders:
-                    print('4')
+                    # print('4')
                     order_result = {}
                     for trading_pair in orders:
                         # autotrader.balance = autotrader.kl_socket.balance
+                        # print('deepcopy orders to order_result')
                         order_result[trading_pair] = copy.deepcopy(orders[trading_pair].order)
                         order_result[trading_pair]['status'] = None
-                        if orders[trading_pair]['status'] == 'REISSUE_ST':
-                            autotrader.reissue_stop_trail(autotrader, orders[trading_pair])
+                        # print('7')
+                        if orders[trading_pair].order['status'] == 'REISSUE_ST':
+                            print('st reissue in main')
+                            await autotrader.reissue_stop_trail(autotrader, orders[trading_pair])
                             continue
-                        if orders[trading_pair]['status'] == 'EXPIRED':
+                        if orders[trading_pair].order['status'] == 'EXPIRED':
+                            print(f'order expired for pair {trading_pair}')
                             if await orders[trading_pair].cancel(autotrader) is True:
                                 print(f"Order cancelled: {trading_pair} {orders[trading_pair].order['name']}")
                             continue
+                        # print('9')
                         if orders[trading_pair].alive():
+                            print(f'order alive for pair {trading_pair}')
                             if autotrader.kl_socket.bal_update_flag[trading_pair] is True:
                                 autotrader.kl_socket.current_pair_buffer.append(trading_pair)
-                                if orders[trading_pair].order['name'] == 'SellHigh':
+                                # print('11')
+                                print(orders[trading_pair].order)
+                                if orders[trading_pair].order.get('order_name') == 'SellHigh':
+                                    # print('12')
                                     if autotrader.order_stop_trail[trading_pair].alive():
                                         if await autotrader.order_stop_trail[trading_pair].cancel(autotrader) is False:
+                                            print('Error cancelling stop trail')
                                             break
                                 order_result[trading_pair] = await autotrader.place_order(**orders[trading_pair].order)
                                 autotrader.kl_socket.bal_update_flag[trading_pair] = False
-                            # print('4')
+                            # print('6')
                             if order_result[trading_pair]:
                                 # print(order_result[trading_pair])
                                 orders[trading_pair].order['status'] = order_result[trading_pair]['status']
                             else:
                                 print('Error placing order.')
-
                     autotrader.log_data(autotrader.kl_socket.indicators, order_result)
         except KeyboardInterrupt:
             # if Ctrl+C or IDE stopped - doesn't seem to trigger if program is interrupted in a sub-task
