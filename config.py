@@ -71,6 +71,11 @@ order_opts = {
     'commission': 0.0
 }
 
+
+# order types
+order_type_buy = 'MARKET'
+order_type_sell = 'LIMIT'
+
 # list of pairs to analyze
 trading_pairs = {
     'BNBUSDT':  # change back to xlm
