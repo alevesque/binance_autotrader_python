@@ -15,7 +15,6 @@ from unicorn_binance_websocket_api import BinanceWebSocketApiManager
 import decimal
 
 # TODO: needs serious evaluation of selling settings
-# not sure if did correctly and not sure how to signal main script for StopTrail
 
 
 class BinanceTrader:
@@ -41,6 +40,7 @@ class BinanceTrader:
         self.buy_time = {}
         self.buy_comm = {}
         self.buy_size = {}
+        self.shared_order_vars = {}
         pass
 
     async def initialize_trade_engine(self):
@@ -176,7 +176,7 @@ class BinanceTrader:
             order_result['time'] = float(order_result.pop('transactTime'))
             order_result['price'] = float(order_result.pop('price'))
             order_result['commission'] = cumulative_comm
-            order_result['name'] = order_name
+            order_result['order_name'] = order_name
             if order_result['side'] == 'BUY' and order_result['status'] == 'FILLED':
                 self.buy_comm[order_result['symbol']] = cumulative_comm
         elif datastream == 'Type2':
@@ -239,7 +239,7 @@ class BinanceTrader:
         if self.buy_price[trading_pair] == 0.0 or self.buy_size[trading_pair] == 0.0:
             self.buy_size[trading_pair] = 1.0
             self.buy_price[trading_pair] = 1.0
-        '''values_of_interest = ['orderId', 'symbol', 'type', 'name', 'status', 'quantity', 'price', 'commission']
+        '''values_of_interest = ['orderId', 'symbol', 'type', 'order_name', 'status', 'quantity', 'price', 'commission']
         _a = order_result[trading_pair]
         output_temp = [f"OrderID:"].append(
             [f"{key}: {_a[key]}" for key in _a if key in values_of_interest]
@@ -250,7 +250,7 @@ class BinanceTrader:
                 f"OrderID: {order_result[trading_pair]['orderId']:3d} " +
                 f"{order_result[trading_pair]['symbol']:<2} " +
                 f"{order_result[trading_pair]['type']:<6} " +
-                f"{order_result[trading_pair]['name']:<6} ".ljust(5) +
+                f"{order_result[trading_pair]['order_name']:<6} ".ljust(5) +
                 "Status: " +
                 f"{order_result[trading_pair]['status']:1} ".ljust(17) +
                 "Size: ".ljust(6) +
@@ -278,20 +278,27 @@ class BinanceTrader:
         return dt, output
 
     def log_data(self, indicators: dict, order_result: dict):
+        # TODO: make it so it doesnt log if nothing changed
+        # self.output_prev, compare to output and if same, don't print
         for trading_pair in self.exchange_info:
             if not order_result.get(trading_pair):
-                return
+                continue
             # if a current order is not filled, log indicators
             # else log order info to console
             if order_result[trading_pair].get('status'):
                 dt, output = self._generate_order_output(order_result, trading_pair)
                 print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(), output))
             else:
+                # TODO: suppress indicator output for now, figure out how to suppress duplicate lines later
+                # or if we even care
+                '''
                 if not indicators.get(trading_pair):
                     break
                 for interval in self.intervals:
                     dt, output = self._generate_indicator_output(indicators, interval, trading_pair)
                     print('%s, %.8s, %s' % (dt.date().isoformat(), dt.time(), output))
+                    '''
+                pass
         return
 
     async def get_exchange_info(self):
@@ -425,7 +432,7 @@ class BinanceTrader:
         order_options['price'] = float("{0:.{1}f}".format(order_price, self.exchange_info[pair]['baseAssetPrecision']))
         # print(order_options['price'])
         order_options['type'] = order_type
-        order_options['name'] = order_name
+        order_options['order_name'] = order_name
         order_options['side'] = order_side
         order_options['status'] = order_status
         if order_side == 'BUY':
@@ -462,16 +469,40 @@ class BinanceTrader:
             Buy? T/F.
 
         """
-        ######### TODO: INSERT BUY CONDITIONS HERE ##########
+
         '''if indicators[trading_pair]['5m'][1]['RSI6'] < 10:
             return True
         else:
             return False'''
-        return True
+
+        '''print('\n indicators')
+            print(indicators[trading_pair])
+            print('end indicators')'''
+        if self.shared_order_vars[trading_pair]['base_asset_bal'] > self.trade_qty_limits[trading_pair]['BUY'][config.order_type_buy]['MIN']:
+            # print('too much money')
+            return False
+        if self.order_buy[trading_pair].alive():
+            # print('buy order alive')
+            # if it has been too long, cancel order
+            time_limit_s = 30
+            if self.buy_time[trading_pair]/1000+time_limit_s < indicators[trading_pair][self.intervals[0]][1]['time']/1000:
+                print('buy order expired')
+                # self.order_buy[trading_pair].order['status'] = 'EXPIRED'
+                # orders[trading_pair] = self.order_buy[trading_pair]
+                self.shared_order_vars[trading_pair]['status'] = 'EXPIRED'
+                return True
+            return False
+        else:
+            ######### TODO: INSERT BUY CONDITIONS HERE ##########
+            if not True:  # self.buy_logic(indicators, trading_pair):
+                # TODO: replace condition placeholder with actual buying logic that was originally in this function (see above)
+                return False
+        return False
 
     def sell_logic(self, indicators: dict, trading_pair: str) -> bool:
         """
-        Takes indicators and returns True/False if conditions are met or not
+        Takes indicators and returns True/False if conditions are met or not.
+        Signals main script of order parameters via return True and self.shared_order_vars.
 
         Parameters
         ----------
@@ -487,8 +518,51 @@ class BinanceTrader:
             Sell? T/F..
 
         """
-        ############# TODO: INSERT CONDITIONS HERE ##############
-        return True
+        # if we have below the min balance for selling
+        if self.shared_order_vars[trading_pair]['base_asset_bal'] <= self.trade_qty_limits[trading_pair]['SELL'][config.order_type_sell]['MIN']:  # comment out bal >= minpossell when test
+            return False
+        # print('sell bal good')
+        if self.order_sell_high[trading_pair].alive() is True:
+            # if in sell mode and order_sell_high is alive,
+            # TODO check if time limit reached - implement duration check into Order class?
+            # TODO Duration could replace self.buy_time if it doesnt get overwritten
+            # TODO create self.sell_order_created_time_ms[trading_pair] somewhere
+            # if it has been too long, cancel order
+            print('sell high expired check')
+            time_limit_s = 30
+            if indicators[trading_pair][self.intervals[0]][1]['time']/1000 > self.sell_order_created_time_ms[trading_pair]/1000+time_limit_s:
+                self.order_sell_high[trading_pair].order['status'] = 'EXPIRED'
+                self.shared_order_vars[trading_pair] = self.order_sell_high[trading_pair].order
+                return True
+            return False
+
+        if self.order_stop_trail[trading_pair].alive() is True:
+            # only stop trail is alive, so check if hit stop price
+            if self.order_stop_trail[trading_pair].check(self.shared_order_vars[trading_pair]['order_price']):
+                print('st check')
+                self.shared_order_vars[trading_pair] = self.order_stop_trail[trading_pair].order
+                return True
+            # if sell conditions are good, sell for profit
+            ############# TODO: INSERT CONDITIONS HERE ##############
+            if True:  # self.sell_logic(indicators, trading_pair):
+                # TODO: replace condition placeholder with actual selling logic that was originally in this function (see above)
+                print('sell high')
+                self.shared_order_vars[trading_pair]['order_name'] = 'SellHigh'
+                return True
+            # if it didn't hit the stop price and sell logic is not indicating a profit sell
+            # set status to reissue_st to tell main function to cancel then reorder
+            print('reissue st')
+            self.order_stop_trail[trading_pair].order['status'] = 'REISSUE_ST'
+            self.shared_order_vars[trading_pair] = self.order_stop_trail[trading_pair].order
+            return True
+        else:
+            print('stop trail dead, set stop trail')
+            # TODO: add delay so it isn't setting a million stop trails every minute
+            # if indicators[trading_pair][self.intervals[0]][1]['time']/1000 > self.sell_order_created_time_ms[trading_pair]/1000+time_limit_s:
+            # if both sell orders are closed, set StopTrail
+            self.shared_order_vars[trading_pair]['order_name'] = 'StopTrail Sell'
+            self.shared_order_vars[trading_pair]['order_type'] = config.order_type_sell
+            return True
 
 
 class BinanceTraderWIP(BinanceTrader):
@@ -503,16 +577,13 @@ class BinanceTraderWIP(BinanceTrader):
     # appropriate parameters.
     ##################################################################
     def trading_strategy(self, indicators: dict, current_data: dict) -> dict[Order]:
-        order_type_buy = 'MARKET'
-        order_type_sell = 'LIMIT'
         orders = {}
-        shared_order_vars = {}
         for trading_pair in self.exchange_info:
             if not indicators[trading_pair][self.intervals[1]]:
-                # print('No indicators for {}, break.'.format(trading_pair))
-                break
+                # print('No indicators for {}, continue.'.format(trading_pair))
+                continue
             # print(f'order conditions check for: {trading_pair}')
-            shared_order_vars[trading_pair] = {
+            self.shared_order_vars[trading_pair] = {
                 'pair': trading_pair,
                 'base_asset_bal': self.kl_socket.balance[config.trading_pairs[trading_pair]['baseAsset']],
                 'quote_asset_bal': self.kl_socket.balance[config.trading_pairs[trading_pair]['quoteAsset']],
@@ -529,88 +600,30 @@ class BinanceTraderWIP(BinanceTrader):
             #####################
             # BUYING CONDITIONS #
             #####################
-            '''print('\n indicators')
-            print(indicators[trading_pair])
-            print('\n end indicators')'''
-            orders[trading_pair] = self.order_buy[trading_pair]
-            if self.order_buy[trading_pair].alive():
-                # if it has been too long, cancel order
-                time_limit_s = 30
-                if self.buy_time[trading_pair]/1000+time_limit_s < indicators[trading_pair][self.intervals[0]][1]['time']/1000:
-                    # if await self.order_buy[trading_pair].cancel(self) is True:
-                    self.order_buy[trading_pair].order['status'] = 'EXPIRED'
-                    orders[trading_pair] = self.order_buy[trading_pair]
-                continue
-            if shared_order_vars[trading_pair]['base_asset_bal'] > self.trade_qty_limits[trading_pair]['BUY'][order_type_buy]['MIN']:
-                continue
-            if not self.buy_logic(indicators, trading_pair):
-                continue
-
-            order_opts = self.setup_order_options(
-                order_side='BUY',
-                order_type=order_type_buy,  # TODO del when not in testnet
-                order_name='Buy',
-                **shared_order_vars[trading_pair]
-            )
-            self.order_buy[trading_pair].set(**order_opts)
-            orders[trading_pair] = self.order_buy[trading_pair]
+            # orders[trading_pair] = self.order_buy[trading_pair]
+            if self.buy_logic(indicators, trading_pair) is True:
+                # print('set buy order opts')
+                order_opts = self.setup_order_options(
+                    order_side='BUY',
+                    order_type=config.order_type_buy,  # TODO del when not in testnet
+                    order_name='Buy',
+                    **self.shared_order_vars[trading_pair]
+                )
+                print('buy order set')
+                self.order_buy[trading_pair].set(**order_opts)
+                orders[trading_pair] = self.order_buy[trading_pair]
             ######################
             # SELLING CONDITIONS #
             ######################
-            # if we have below the min balance for selling
-            if shared_order_vars[trading_pair]['base_asset_bal'] <= self.trade_qty_limits[trading_pair]['SELL'][order_type_sell]['MIN']:  # comment out bal >= minpossell when test
-                continue
-
-            # if sell conditions are good, sell for profit
-            if self.sell_logic(indicators):
-                # print('sell high')
+            elif self.sell_logic(indicators, trading_pair) is True:
                 order_opts = self.setup_order_options(
-                    order_name='SellHigh',
-                    **shared_order_vars[trading_pair])
-                self.order_sell_high[trading_pair].set(**order_opts)
-                orders[trading_pair] = self.order_sell_high[trading_pair]
-                continue
-
-            if not self.order_sell_high[trading_pair].alive():
-                # print('sell high dead')
-                if not self.order_stop_trail[trading_pair].alive():
-                    # print('stop trail dead')
-                    # if both sell orders are closed, set StopTrail
-                    order_opts = self.setup_order_options(
-                        order_type=order_type_sell,
-                        order_name='StopTrail Sell',
-                        **shared_order_vars[trading_pair]
-                    )
+                    **self.shared_order_vars[trading_pair])
+                if self.shared_order_vars[trading_pair]['order_name'] == 'StopTrail Sell':
                     self.order_stop_trail[trading_pair].set(**order_opts)
-                    # fix ticksize of price that was modified by StopTrailOrder.check()
                     orders[trading_pair] = self.order_stop_trail[trading_pair]
-                    # print(self.order_stop_trail[trading_pair].order)
-                    continue
-                # only stoptrail is alive, so check if hit stop price
-                if self.order_stop_trail[trading_pair].check(shared_order_vars[trading_pair]['order_price']):
-                    orders[trading_pair] = self.order_stop_trail[trading_pair]
-                    continue
-                else:
-                    # if it didn't hit the stop price and sell_logic() is not indicating a profit sell
-                    # set status to reissue_st to tell main function to cancel then reorder
-                    self.order_stop_trail[trading_pair].order['status'] = 'REISSUE_ST'
-                    orders[trading_pair] = self.order_stop_trail[trading_pair]
-
-                    # TODO: need to signal to main script to cancel order while maintaining the new price setting
-                    # TODO: Done? run to check
-                    # may need a class variable for each pair, basically to replace orders[trading_pair] in main script
-
-            else:
-                # if in sell mode and order_sell_high is open,
-                # TODO check if time limit reached - implement duration check into Order class?
-                # TODO Duration could replace self.buy_time if it doesnt get overwritten
-                # if it has been too long, cancel order
-                time_limit_s = 30
-                if indicators[trading_pair][self.intervals[0]][1]['time']/1000 > self.sell_order_created_time_ms[trading_pair]/1000+time_limit_s:
-                    # if await self.order_sell_high[trading_pair].cancel(self) is True:
-                    self.order_sell_high[trading_pair].order['status'] = 'EXPIRED'
+                elif self.shared_order_vars[trading_pair]['order_name'] == 'SellHigh':
+                    self.order_sell_high[trading_pair].set(**order_opts)
                     orders[trading_pair] = self.order_sell_high[trading_pair]
-                    continue
         return orders
 
     ##################################################################
@@ -655,7 +668,7 @@ class BinanceTraderWIP(BinanceTrader):
             {'order_p': order_parameters, 'self': self}
         )
         if order_result_raw is not False:
-            order_result = self._order_stream_data_process(order_result_raw, order_params['name'], datastream='Type1')
+            order_result = self._order_stream_data_process(order_result_raw, order_params['order_name'], datastream='Type1')
         else:
             order_result = {}
         return order_result
@@ -666,11 +679,13 @@ class BinanceTraderWIP(BinanceTrader):
         # get current stop trail order details
         order_params_old = order_st.order
         # cancel current stop trail order
-        order_st.cancel(trader)
-        order_params_old['status'] = 'NEW'
-        # issue new order with the updated settings
-        self.place_order(order_params_old)
-        return
+        if await order_st.cancel(trader) is True:
+            print('stop trail reissued')
+            order_params_old['status'] = 'NEW'
+            # issue new order with the updated settings
+            await self.place_order(**order_params_old)
+            return True
+        return False
 
 
 class BinanceWs:
@@ -715,7 +730,6 @@ class BinanceWs:
                 self.wallet_update(json_data)
             # worker_thread = threading.Thread(target=self._balance_update)
             # worker_thread.start()
-
 
     ##################################################################
     # PROCESS RAW KLINES
@@ -852,7 +866,8 @@ class Order:
         else:
             return False
 
-    def round_decimal(self, decimal_number: float, base: str, rounding=decimal.ROUND_DOWN) -> float:
+    @staticmethod
+    def round_decimal(decimal_number: float, base: str, rounding=decimal.ROUND_DOWN) -> float:
         """
         Round decimal number to the nearest base
 
