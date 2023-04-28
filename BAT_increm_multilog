@@ -8,6 +8,7 @@ import config
 import nest_asyncio
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', RuntimeWarning)
+import traceback
 
 
 async def main() -> None:
@@ -26,7 +27,7 @@ async def main() -> None:
                 # print('1')
                 await autotrader.kl_socket.run()
                 # print('2')
-                orders = autotrader.trading_strategy(autotrader.kl_socket.indicators, autotrader.kl_socket.data)
+                orders = autotrader.trading_strategy(autotrader.kl_socket.indicators)
                 # print('3')
 
                 if orders:
@@ -59,7 +60,7 @@ async def main() -> None:
                                     if autotrader.order_stop_trail[trading_pair].alive():
                                         if await autotrader.order_stop_trail[trading_pair].cancel(autotrader) is False:
                                             print('Error cancelling stop trail')
-                                            break
+                                            continue
                                 order_result[trading_pair] = await autotrader.place_order(**orders[trading_pair].order)
                                 autotrader.kl_socket.bal_update_flag[trading_pair] = False
                             # print('6')
@@ -80,6 +81,7 @@ async def main() -> None:
             print('Closing connection...')
             await autotrader.async_client.close_connection()
             print('Connection closed.')
+            traceback.print_exc()
             return
 
 
