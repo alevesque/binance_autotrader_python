@@ -41,6 +41,7 @@ class BinanceTrader:
         self.buy_comm = {}
         self.buy_size = {}
         self.shared_order_vars = {}
+        self.sell_order_created_time_ms = {}
         pass
 
     async def initialize_trade_engine(self):
@@ -73,7 +74,10 @@ class BinanceTrader:
 
         channels = {f'kline_{interval}' for interval in self.intervals}
         markets = {trading_pair for trading_pair in self.exchange_info}
-        self.kl_socket = BinanceWs(channels=channels, markets=markets, spool=self.data)
+        self.kl_socket = BinanceWs(
+            channels=channels, 
+            markets=markets, 
+            spool=self.data)
         print('Sockets initialized.')
 
         init_acc_result = await self._server_connect_try_except(
@@ -82,15 +86,17 @@ class BinanceTrader:
             {'self': self}
         )
         # update wallet balance
-        if self.kl_socket.wallet_update(init_acc_result, response_type='Type1') is False:
+        if self.kl_socket.wallet_update(
+                init_acc_result, response_type='Type1') is False:
             print('Error updating wallet.')
             return False
         print('Initialization Complete.')
         return True
 
     async def _initialize_exchange_connection(self) -> bool:
-        # initialize websocket client to livestream data one ping at a time. preferable to
-        # downloading redundant or late data as would happen with manual update periods using regular client
+        # initialize websocket client to livestream data one ping at a time. 
+        # preferable to downloading redundant or late data as would happen
+        #  with manual update periods using regular client
         self.async_client = await self._server_connect_try_except(
             "AsyncClient.create("
             "api_key=config.API_KEY," +
@@ -108,8 +114,19 @@ class BinanceTrader:
         return False
 
     async def _prelim_data_spool(self) -> bool:
-        # download initial data for the longer EMA timeframes, so calculations can start immediately
-        # rather than spooling up hundreds of ticks of price data for EMA600, 400 etc
+        '''
+        Downloads initial data for the longer EMA timeframes, so calculations
+        can start immediately rather than spooling up hundreds of ticks of 
+        price data for EMA600, 400 etc.
+
+        Returns
+        -------
+        bool
+            Whether the operation succeeded or not.
+        '''
+        
+        
+        # 
         for trading_pair in self.exchange_info:
             self.data[trading_pair] = {}
             for _interval in self.intervals:
@@ -157,7 +174,33 @@ class BinanceTrader:
         else:
             return conn_result
 
-    def _order_stream_data_process(self, order_result_raw: dict, order_name: str, datastream: str) -> dict:
+    def _order_stream_data_process(self, 
+                                   order_result_raw: dict, 
+                                   order_name: str, 
+                                   datastream: str) -> dict:
+        '''
+        Process data from order websocket stream and 
+        turn it into a formatted dict.
+        
+        Parameters
+        ----------
+        order_result_raw : dict
+            Raw order result returned from websocket stream.
+        order_name : str
+            Name of the order being processed (SellHigh, StopTrail Sell etc)
+        datastream : str
+            Type of data returned by this query. Binance seems to return two 
+            types, one with full words as keys (what we're calling Type1) and 
+            one with just one letter abbreviations (Type2).
+
+        Returns
+        -------
+        dict
+            Formatted dict of relevant parameters that was returned from the 
+            websocket stream.
+        '''
+        
+        
         order_result = {}
         if not order_result_raw:
             return order_result
@@ -195,6 +238,14 @@ class BinanceTrader:
         return order_result
 
     async def _close_all_open_orders(self) -> bool:
+        '''
+        Requests all open orders from server then closes all of them.
+
+        Returns
+        -------
+        bool
+            Whether the operation succeeded or not.
+        '''
         open_orders = await self._server_connect_try_except(
             "self.async_client.get_open_orders()",
             {},
@@ -214,11 +265,15 @@ class BinanceTrader:
         return False
 
     @staticmethod
-    def _generate_indicator_output(indicators: dict, interval: str, trading_pair: str) -> tuple[datetime, str]:
+    def _generate_indicator_output(indicators: dict, 
+                                   interval: str, 
+                                   trading_pair: str) -> tuple[datetime, str]:
         if not indicators[trading_pair].get(interval):
             return 0, ''
-        dt = datetime.datetime.fromtimestamp(indicators[trading_pair][interval][1]['time']/1000)
-        _latest_indicators = indicators[trading_pair][interval][1]  # current indicators for current pair, interval
+        dt = datetime.datetime.fromtimestamp(
+            indicators[trading_pair][interval][1]['time']/1000)
+        # current indicators for current pair, interval
+        _latest_indicators = indicators[trading_pair][interval][1]
         _output_temp = [f"{trading_pair}: {interval} "] + \
                       [f"{key}: {round(_latest_indicators[key], 4)}" for key in _latest_indicators]
         output = " ".join(_output_temp)
@@ -380,14 +435,14 @@ class BinanceTrader:
     @staticmethod
     def round_decimal(decimal_number: float, base: str, rounding=decimal.ROUND_DOWN) -> float:
         """
-        Round decimal number to the nearest base
-
-        :param decimal_number: decimal number to round to the nearest base
-        :type decimal_number: Decimal
-        :param base: rounding base, e.g. 5, Decimal('0.05')
-        :type base: int or Decimal
-        :param rounding: Decimal rounding type
-        :rtype: Decimal
+        Round decimal number to the nearest base.
+        ----------
+        decimal_number : float
+            decimal number to round to the nearest base
+        base : str
+            rounding base, e.g. 5, Decimal('0.05')
+        rounding : decimal.ROUND_DOWN
+            Decimal rounding type constant
         """
         decimal_number = decimal.Decimal(decimal_number)
         base = decimal.Decimal(base)
@@ -454,7 +509,8 @@ class BinanceTrader:
     def buy_logic(self, indicators: dict, trading_pair: str) -> bool:
         """
         Takes indicators and returns True/False if conditions are met or not
-
+        Signals main script of order parameters via return True and self.shared_order_vars.
+        
         Parameters
         ----------
         indicators : dict
@@ -467,36 +523,28 @@ class BinanceTrader:
         -------
         bool
             Buy? T/F.
-
         """
-
-        '''if indicators[trading_pair]['5m'][1]['RSI6'] < 10:
-            return True
-        else:
-            return False'''
-
-        '''print('\n indicators')
-            print(indicators[trading_pair])
-            print('end indicators')'''
+        # print('b')
+        # if we have above the min balance for buying
         if self.shared_order_vars[trading_pair]['base_asset_bal'] > self.trade_qty_limits[trading_pair]['BUY'][config.order_type_buy]['MIN']:
-            # print('too much money')
+            print('too much money')
             return False
+        # print('a')
         if self.order_buy[trading_pair].alive():
-            # print('buy order alive')
+            print('buy order alive')
             # if it has been too long, cancel order
             time_limit_s = 30
             if self.buy_time[trading_pair]/1000+time_limit_s < indicators[trading_pair][self.intervals[0]][1]['time']/1000:
                 print('buy order expired')
-                # self.order_buy[trading_pair].order['status'] = 'EXPIRED'
-                # orders[trading_pair] = self.order_buy[trading_pair]
                 self.shared_order_vars[trading_pair]['status'] = 'EXPIRED'
                 return True
             return False
         else:
-            ######### TODO: INSERT BUY CONDITIONS HERE ##########
-            if not True:  # self.buy_logic(indicators, trading_pair):
-                # TODO: replace condition placeholder with actual buying logic that was originally in this function (see above)
-                return False
+            # if indicators are showing as a good time to buy
+            if self.buy_condition_check(indicators, trading_pair) is True:
+                print('setting buy order')
+                self.shared_order_vars[trading_pair]['order_name'] = 'Buy'
+                return True
         return False
 
     def sell_logic(self, indicators: dict, trading_pair: str) -> bool:
@@ -515,18 +563,14 @@ class BinanceTrader:
         Returns
         -------
         bool
-            Sell? T/F..
-
+            Sell? T/F
         """
         # if we have below the min balance for selling
         if self.shared_order_vars[trading_pair]['base_asset_bal'] <= self.trade_qty_limits[trading_pair]['SELL'][config.order_type_sell]['MIN']:  # comment out bal >= minpossell when test
             return False
-        # print('sell bal good')
+        print('sell bal good')
         if self.order_sell_high[trading_pair].alive() is True:
             # if in sell mode and order_sell_high is alive,
-            # TODO check if time limit reached - implement duration check into Order class?
-            # TODO Duration could replace self.buy_time if it doesnt get overwritten
-            # TODO create self.sell_order_created_time_ms[trading_pair] somewhere
             # if it has been too long, cancel order
             print('sell high expired check')
             time_limit_s = 30
@@ -543,9 +587,7 @@ class BinanceTrader:
                 self.shared_order_vars[trading_pair] = self.order_stop_trail[trading_pair].order
                 return True
             # if sell conditions are good, sell for profit
-            ############# TODO: INSERT CONDITIONS HERE ##############
-            if True:  # self.sell_logic(indicators, trading_pair):
-                # TODO: replace condition placeholder with actual selling logic that was originally in this function (see above)
+            if self.sell_condition_check(indicators, trading_pair) is True:
                 print('sell high')
                 self.shared_order_vars[trading_pair]['order_name'] = 'SellHigh'
                 return True
@@ -557,12 +599,29 @@ class BinanceTrader:
             return True
         else:
             print('stop trail dead, set stop trail')
-            # TODO: add delay so it isn't setting a million stop trails every minute
-            # if indicators[trading_pair][self.intervals[0]][1]['time']/1000 > self.sell_order_created_time_ms[trading_pair]/1000+time_limit_s:
-            # if both sell orders are closed, set StopTrail
-            self.shared_order_vars[trading_pair]['order_name'] = 'StopTrail Sell'
-            self.shared_order_vars[trading_pair]['order_type'] = config.order_type_sell
+            # add delay so testing isn't setting a million stop trails every minute
+            time_limit_s = 15
+            if indicators[trading_pair][self.intervals[0]][1]['time']/1000 > self.sell_order_created_time_ms[trading_pair]/1000+time_limit_s:
+                # if both sell orders are closed, set StopTrail
+                self.shared_order_vars[trading_pair]['order_name'] = 'StopTrail Sell'
+                self.shared_order_vars[trading_pair]['order_type'] = config.order_type_sell
             return True
+     
+    def buy_condition_check(self, indicators: dict, trading_pair: str) -> bool:
+        ######### TODO: INSERT BUY CONDITIONS HERE ##########
+        '''
+        # placeholder logic:
+        if indicators[trading_pair]['5m'][1]['RSI6'] < 10:
+            return True
+        else:
+            return False'''
+        return True
+    
+    def sell_condition_check(self, indicators: dict, trading_pair: str) -> bool:
+        ######### TODO: INSERT SELL CONDITIONS HERE #########
+        return True
+    
+    
 
 
 class BinanceTraderWIP(BinanceTrader):
@@ -572,11 +631,23 @@ class BinanceTraderWIP(BinanceTrader):
         pass
 
     ##################################################################
-    # TRADING STRATEGY (archaic name, change to something more relevant)
-    # Determines if it's the right time, then sets up orders with
-    # appropriate parameters.
+    # TRADING STRATEGY (archaic name, change to something more relevant?)
     ##################################################################
-    def trading_strategy(self, indicators: dict, current_data: dict) -> dict[Order]:
+    def trading_strategy(self, indicators: dict) -> dict[Order]:
+        '''
+        Determines if it's the right conditions to buy or sell,
+        then sets up orders with appropriate parameters.
+
+        Parameters
+        ----------
+        indicators : dict
+            Market indicators from TA-LIB.
+        
+        Returns
+        -------
+        dict[Order]
+            Planned orders for each trading pair, if any.
+        '''
         orders = {}
         for trading_pair in self.exchange_info:
             if not indicators[trading_pair][self.intervals[1]]:
@@ -602,11 +673,10 @@ class BinanceTraderWIP(BinanceTrader):
             #####################
             # orders[trading_pair] = self.order_buy[trading_pair]
             if self.buy_logic(indicators, trading_pair) is True:
-                # print('set buy order opts')
+                print('set buy order opts')
                 order_opts = self.setup_order_options(
                     order_side='BUY',
-                    order_type=config.order_type_buy,  # TODO del when not in testnet
-                    order_name='Buy',
+                    order_type=config.order_type_buy,  # TODO del when not in testnet - (why?)
                     **self.shared_order_vars[trading_pair]
                 )
                 print('buy order set')
@@ -618,9 +688,12 @@ class BinanceTraderWIP(BinanceTrader):
             elif self.sell_logic(indicators, trading_pair) is True:
                 order_opts = self.setup_order_options(
                     **self.shared_order_vars[trading_pair])
+                self.sell_order_created_time_ms[trading_pair] = time.time()
+                
                 if self.shared_order_vars[trading_pair]['order_name'] == 'StopTrail Sell':
                     self.order_stop_trail[trading_pair].set(**order_opts)
                     orders[trading_pair] = self.order_stop_trail[trading_pair]
+                    
                 elif self.shared_order_vars[trading_pair]['order_name'] == 'SellHigh':
                     self.order_sell_high[trading_pair].set(**order_opts)
                     orders[trading_pair] = self.order_sell_high[trading_pair]
@@ -675,7 +748,7 @@ class BinanceTraderWIP(BinanceTrader):
 
     # set new order with same details as previous order
     # (order_price already updated with .check() above)
-    async def reissue_stop_trail(self, trader, order_st):
+    async def reissue_stop_trail(self, trader: AsyncClient, order_st: Order) -> bool:
         # get current stop trail order details
         order_params_old = order_st.order
         # cancel current stop trail order
