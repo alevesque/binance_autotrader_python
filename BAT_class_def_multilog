@@ -526,8 +526,7 @@ class BinanceTrader:
         if self.order_buy[trading_pair].alive():
             print('buy order alive')
             # if it has been too long, cancel order
-            time_limit_s = 30
-            if self.buy_time[trading_pair]/1000+time_limit_s < indicators[trading_pair][self.intervals[0]][1]['time']/1000:
+            if self.order_buy[trading_pair].check_expired(time_limit_s=30):
                 print('buy order expired')
                 self.shared_order_vars[trading_pair]['status'] = 'EXPIRED'
                 return True
