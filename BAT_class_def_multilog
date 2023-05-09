@@ -443,14 +443,14 @@ class BinanceTrader:
         base = decimal.Decimal(base)
         return float(base * (decimal_number / base).quantize(1, rounding=rounding))
 
-    def setup_order_options(self, pair: str, base_asset_bal: float, quote_asset_bal: float, order_price: float,
+    def setup_order_options(self, symbol: str, base_asset_bal: float, quote_asset_bal: float, order_price: float,
                             order_side: str = 'SELL', order_type: str = 'LIMIT', order_name: str = '',
                             order_status: str = 'NEW', interval: str = '5m') -> dict:
         """
         Takes options and formats them and turns them into a dict.
         Parameters
         ----------
-        pair : str
+        symbol : str
             asset pair to be traded.
         base_asset_bal : float
             balance of base asset of trading pair.
@@ -476,27 +476,27 @@ class BinanceTrader:
 
         """
         order_options = copy.deepcopy(config.order_opts)
-        order_options['symbol'] = pair
-        order_options['price'] = float("{0:.{1}f}".format(order_price, self.exchange_info[pair]['baseAssetPrecision']))
+        order_options['symbol'] = symbol
+        order_options['price'] = float("{0:.{1}f}".format(order_price, self.exchange_info[symbol]['baseAssetPrecision']))
         order_options['type'] = order_type
         order_options['order_name'] = order_name
         order_options['side'] = order_side
         order_options['status'] = order_status
         order_options['created_time'] = time.time()
         if order_side == 'BUY':
-            self.buy_price[pair] = order_options['price']
+            self.buy_price[symbol] = order_options['price']
             # print('buy price - {}: {}'.format(pair, self.buy_price[pair]))
-            self.buy_size[pair] = 1  # TODO reset when not in testnet # float("{:.0f}".format(0.98*quote_asset_bal/self.data['close'].values[-1]))
-            if self.buy_size[pair] > self.trade_qty_limits[pair][order_side][order_type]['MAX']:
-                self.buy_size[pair] = self.trade_qty_limits[pair][order_side][order_type]['MAX']
-            order_options['quantity'] = self.buy_size[pair]
-            self.buy_time[pair] = time.time()
+            self.buy_size[symbol] = 1  # TODO reset when not in testnet # float("{:.0f}".format(0.98*quote_asset_bal/self.data['close'].values[-1]))
+            if self.buy_size[symbol] > self.trade_qty_limits[symbol][order_side][order_type]['MAX']:
+                self.buy_size[symbol] = self.trade_qty_limits[symbol][order_side][order_type]['MAX']
+            order_options['quantity'] = self.buy_size[symbol]
+            self.buy_time[symbol] = time.time()
 
         elif order_side == 'SELL':
-            if base_asset_bal > self.trade_qty_limits[pair][order_side][order_type]['MAX']:
-                base_asset_bal = self.trade_qty_limits[pair][order_side][order_type]['MAX']
+            if base_asset_bal > self.trade_qty_limits[symbol][order_side][order_type]['MAX']:
+                base_asset_bal = self.trade_qty_limits[symbol][order_side][order_type]['MAX']
             # reset bal when test to self.buy_size[pair]
-            order_options['quantity'] = float("{0:.{1}f}".format(base_asset_bal, self.exchange_info[pair]['baseAssetPrecision']))
+            order_options['quantity'] = float("{0:.{1}f}".format(base_asset_bal, self.exchange_info[symbol]['baseAssetPrecision']))
         return order_options
 
     def buy_logic(self, indicators: dict, trading_pair: str) -> bool:
@@ -520,7 +520,7 @@ class BinanceTrader:
         # print('b')
         # if we have above the min balance for buying
         if self.shared_order_vars[trading_pair]['base_asset_bal'] > self.trade_qty_limits[trading_pair]['BUY'][config.order_type_buy]['MIN']:
-            print('too much money')
+            # print('too much money')
             return False
         # print('a')
         if self.order_buy[trading_pair].alive():
@@ -532,6 +532,7 @@ class BinanceTrader:
                 return True
             return False
         else:
+            self.shared_order_vars[trading_pair]['order_name'] = ''
             # if indicators are showing as a good time to buy
             if self.buy_condition_check(indicators, trading_pair) is True:
                 print('setting buy order')
@@ -560,7 +561,7 @@ class BinanceTrader:
         # if we have below the min balance for selling
         if self.shared_order_vars[trading_pair]['base_asset_bal'] <= self.trade_qty_limits[trading_pair]['SELL'][config.order_type_sell]['MIN']:  # comment out bal >= minpossell when test
             return False
-        print('sell bal good')
+        # print('sell bal good')
         if self.order_sell_high[trading_pair].alive() is True:
             # if in sell mode and order_sell_high is alive,
             # if it has been too long, cancel order
@@ -589,7 +590,8 @@ class BinanceTrader:
             self.shared_order_vars[trading_pair] = self.order_stop_trail[trading_pair].order
             return True
         else:
-            print('stop trail dead, set stop trail')
+            # print('stop trail dead, set stop trail')
+            self.shared_order_vars[trading_pair]['order_name'] = ''
             # add delay so testing isn't setting a million stop trails every minute
             if self.order_stop_trail[trading_pair].check_expired(time_limit_s=15):
                 # if both sell orders are closed, set StopTrail
@@ -640,7 +642,7 @@ class BinanceTraderWIP(BinanceTrader):
                 continue
             # print(f'order conditions check for: {trading_pair}')
             self.shared_order_vars[trading_pair] = {
-                'pair': trading_pair,
+                'symbol': trading_pair,
                 'base_asset_bal': self.kl_socket.balance[config.trading_pairs[trading_pair]['baseAsset']],
                 'quote_asset_bal': self.kl_socket.balance[config.trading_pairs[trading_pair]['quoteAsset']],
                 'order_price': float("{:.4f}".format(indicators[trading_pair][self.intervals[0]][1]['close_price'])),
@@ -872,7 +874,9 @@ class BinanceWs:
                     if bal.get('asset') in wallet_pair_list:
                         self.balance[bal['asset']] = float(bal.get('free'))
                 print(self.balance)
-                self.bal_update_flag[self.current_pair_buffer.pop(0)] = True
+                flag = self.current_pair_buffer.get(0)
+                if flag:
+                    self.bal_update_flag[flag] = True
                 return True
 
 
@@ -922,7 +926,7 @@ class Order:
         if (await trader._server_connect_try_except(
                 "asy_client.cancel_order(" +
                 "symbol=self.order['symbol']," +
-                "order_Id=self.order['orderId'])",
+                "orderId=self.order['orderId'])",
                 {},
                 {'self': self, 'asy_client': trader.async_client}
         )):
