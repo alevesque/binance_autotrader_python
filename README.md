@@ -1,12 +1,9 @@
 # binance_autotrader_python
 
 Dependencies:
-  - Backtrader scripts:
   - backtrader
   - ta-lib
   -  matplotlib
-  
-  Binance Autotrader:
   -  ta-lib
   -  binance python api
 
