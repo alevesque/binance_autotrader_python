@@ -1,26 +1,26 @@
 # binance_autotrader_python
 
 Dependencies:
-  Backtrader scripts:
-    backtrader
-    ta-lib
-    matplotlib
+  - Backtrader scripts:
+  - backtrader
+  - ta-lib
+  -  matplotlib
   
   Binance Autotrader:
-    ta-lib
-    binance python api
-    
+  -  ta-lib
+  -  binance python api
 
+    
+_Testing_:
     
 get_data - gets historical data from binance for use in backtrader scripts
 
 backtestgeneric - generic script for testing various strategies (put in buy_logic(), sell_logic()
 
-backtest_stoplimit_ema_cross - actual verified best strategy so far, 10k -> 42k in 3 years
+_Running_:
 
------
-backtestXXXX - various backtesting strategies, EMABest is best so far. RSI did well with a million microtrades until commissions are added into the mix
+**BAT_class_def_multilog** - class definitions for multiple trading pairs
 
-binance trading pairs - list of binance trading pairs so dont have to get_exchange_info
+**BAT_increm_multilog** - main script that executes trade logic
 
-binance_autotraderEMA - implementation of best backtest strat. ideally will be able to be easily adapted to new strategies
+**config** - defines various constants
