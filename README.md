@@ -13,9 +13,9 @@ Dependencies:
     
 _Testing_:
     
-get_data - gets historical data from binance for use in backtrader scripts
+**get_data** - gets historical data from binance for use in backtrader scripts
 
-backtestgeneric - generic script for testing various strategies (put in buy_logic(), sell_logic()
+**backtestgeneric** - generic script for testing various strategies (put in buy_logic(), sell_logic()
 
 _Running_:
 
