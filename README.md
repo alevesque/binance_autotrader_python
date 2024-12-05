@@ -4,7 +4,6 @@ Dependencies:
   - backtrader
   - ta-lib
   -  matplotlib
-  -  ta-lib
   -  binance python api
 
     
