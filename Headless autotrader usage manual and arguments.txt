@@ -1,0 +1,49 @@
+config.json -
+
+
+"telegram_enabled": true,
+"send_real_orders": false,
+"live_symbol": "BNBUSD",    "live_interval": "1h",
+"rsi_period": 2,            "rsi_mode": "simple",
+"rsi_oversold": 31.0,       "rsi_overbought": 70.0,
+"backtest_symbol": "BNBUSD","backtest_interval": "1h",
+"backtest_lookback": "1 year ago UTC"
+"order_type": "trailing_stop" OR "limit"
+"buy_price": null or double - set after a buy and reset to null after a sell. used to persist profitability after a crash/close
+Edit this file to set persistent defaults. CLI arguments override it for one session.
+
+CLI arguments — all trading params now passable at runtime:
+
+
+--headless              no GUI window
+--live                  headless live trading (default when --headless)
+--backtest              headless backtest then exit
+--real-orders           enable real Binance orders
+--no-telegram           suppress Telegram for this session
+--symbol BNBUSD         override trading pair
+--interval 5m           override candle interval
+--rsi-period 2          RSI lookback
+--rsi-mode simple|sma
+--rsi-os 31             oversold threshold
+--rsi-ob 70             overbought threshold
+--lookback "6 months ago UTC"
+--starting-cash 50000
+Usage examples:
+
+
+# GUI (unchanged)
+python autotrader-binancelib-WIP.py
+
+# Headless live trading with config defaults
+python autotrader-binancelib-WIP.py --headless
+
+# Headless live, override symbol and interval
+python autotrader-binancelib-WIP.py --headless --symbol BTCUSDT --interval 5m
+
+# Headless backtest, 6-month window, save chart to logs/
+python autotrader-binancelib-WIP.py --headless --backtest --lookback "6 months ago UTC"
+
+# Headless backtest, different RSI params
+python autotrader-binancelib-WIP.py --headless --backtest --rsi-period 3 --rsi-os 25
+
+python autotrader-binancelib-WIP.py --headless --live --real-orders
