@@ -14,11 +14,14 @@ from binance.client import Client
 from binance import ThreadedWebsocketManager
 from binance.exceptions import BinanceAPIException, BinanceOrderException, BinanceRequestException
 from tkcalendar import DateEntry
-import argparse, sys
+import argparse, sys, signal
 import matplotlib
 import matplotlib.dates as mdates
 import matplotlib.ticker
 from matplotlib.lines import Line2D
+import pandas as pd
+import numpy as np
+
 # Choose backend before any matplotlib submodule is imported.
 # Headless mode uses the file-output Agg backend; GUI mode uses TkAgg.
 matplotlib.use("Agg" if "--headless" in sys.argv else "TkAgg")
@@ -42,6 +45,7 @@ class AppConfig:
     base_asset: str = "BTC"
     quote_asset: str = "USDT"
     starting_cash: float = 100000.0
+    starting_cash_live: float = 1100
     fee_rate: float = 0.001
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -69,6 +73,8 @@ class AppConfig:
     trail_limit_max_retries: int = 1     # retries before falling back to market
     # Crash recovery — persisted buy price so P&L survives restarts
     buy_price: Optional[float] = None
+    # Number of recent closed candles to replay through on_price() on startup
+    warmup_replay_count: int = 5
 
 
 class ConfigLoader:
@@ -88,6 +94,7 @@ class ConfigLoader:
             base_asset=data.get("base_asset", "BTC"),
             quote_asset=data.get("quote_asset", "USDT"),
             starting_cash=float(data.get("starting_cash", 100000.0)),
+            starting_cash_live=float(data.get("starting_cash_live", 1100.0)),
             fee_rate=float(data.get("fee_rate", 0.001)),
             telegram_bot_token=data.get("telegram_bot_token", ""),
             telegram_chat_id=data.get("telegram_chat_id", ""),
@@ -109,6 +116,7 @@ class ConfigLoader:
             trail_limit_widen_pct=float(data.get("trail_limit_widen_pct", 0.05)),
             trail_limit_max_retries=int(data.get("trail_limit_max_retries", 1)),
             buy_price=float(data["buy_price"]) if data.get("buy_price") is not None else None,
+            warmup_replay_count=int(data.get("warmup_replay_count", 5)),
         )
 
     @staticmethod
@@ -370,7 +378,7 @@ def build_daily_summary_image(
         0.5, 0.97,
         f"AUTOTRADER  |  {symbol}  |  {summary_date.strftime('%Y-%m-%d')}",
         ha="center", va="top",
-        color=C_TEXT, fontsize=13, fontweight="bold", fontfamily="monospace",
+        color=C_TEXT, fontsize=16, fontweight="bold", fontfamily="monospace",
     )
 
     # ── Stats panel ───────────────────────────────────────────────────────────
@@ -380,39 +388,39 @@ def build_daily_summary_image(
     ax_s.set_xticks([]); ax_s.set_yticks([])
 
     rows = [
-        ("DAILY PERFORMANCE",                     None,                                        C_GOLD,  11, True),
-        ("─" * 34,                                None,                                        C_BORDER, 7, False),
-        ("Completed trades (today)",              str(len(day_sells)),                         C_TEXT,  10, False),
-        ("  Buys placed",                         str(len(day_buys)),                          C_MUTED, 10, False),
-        ("  Wins / Losses",                       f"{len(day_wins)} / {len(day_losses)}",      C_TEXT,  10, False),
-        ("  Win rate",                            f"{win_rate:.1f}%",                          _pc(win_rate - 50), 10, False),
-        ("─" * 34,                                None,                                        C_BORDER, 7, False),
-        ("PROFIT  (today)",                       None,                                          C_GOLD,  10, True),
-        ("  Account change",                     f"{_ps(day_equity_delta)}{day_equity_delta:.4f}", _pc(day_equity_delta), 10, False),
-        ("  Percent",                            f"{_ps(day_profit_pct)}{day_profit_pct:.2f}%", _pc(day_equity_delta), 10, False),
-        ("  Realised P&L",                       f"{_ps(day_profit)}{day_profit:.4f}",         _pc(day_profit), 10, False),
-        ("─" * 34,                               None,                                          C_BORDER, 7, False),
-        ("PROFIT  (all time)",                   None,                                          C_GOLD,  10, True),
-        ("  Realised P&L",                       f"{_ps(all_profit)}{all_profit:.4f}",          _pc(all_profit), 10, False),
-        ("  Percent",                            f"{_ps(all_profit_pct)}{all_profit_pct:.2f}%", _pc(all_profit), 10, False),
-        ("─" * 34,                               None,                                          C_BORDER, 7, False),
-        ("EQUITY",                               None,                                          C_GOLD,  10, True),
-        ("  Start of day",                       f"{day_start_eq:,.2f}",                        C_TEXT,  10, False),
-        ("  End of day",                         f"{day_end_eq:,.2f}",                          _pc(day_equity_delta), 10, False),
-        ("  Current (account)",                  f"{current_equity:,.2f}",                      _pc(current_equity - starting_equity), 10, False),
+        ("DAILY PERFORMANCE",                     None,                                        C_GOLD,  14, True),
+        ("─" * 34,                                None,                                        C_BORDER, 8, False),
+        ("Completed trades (today)",              str(len(day_sells)),                         C_TEXT,  13, False),
+        ("  Buys placed",                         str(len(day_buys)),                          C_MUTED, 13, False),
+        ("  Wins / Losses",                       f"{len(day_wins)} / {len(day_losses)}",      C_TEXT,  13, False),
+        ("  Win rate",                            f"{win_rate:.1f}%",                          _pc(win_rate - 50), 13, False),
+        ("─" * 34,                                None,                                        C_BORDER, 8, False),
+        ("PROFIT  (today)",                       None,                                          C_GOLD,  13, True),
+        ("  Account change",                     f"{_ps(day_equity_delta)}{day_equity_delta:.4f}", _pc(day_equity_delta), 13, False),
+        ("  Percent",                            f"{_ps(day_profit_pct)}{day_profit_pct:.2f}%", _pc(day_equity_delta), 13, False),
+        ("  Realised P&L",                       f"{_ps(day_profit)}{day_profit:.4f}",         _pc(day_profit), 13, False),
+        ("─" * 34,                               None,                                          C_BORDER, 8, False),
+        ("PROFIT  (all time)",                   None,                                          C_GOLD,  13, True),
+        ("  Realised P&L",                       f"{_ps(all_profit)}{all_profit:.4f}",          _pc(all_profit), 13, False),
+        ("  Percent",                            f"{_ps(all_profit_pct)}{all_profit_pct:.2f}%", _pc(all_profit), 13, False),
+        ("─" * 34,                               None,                                          C_BORDER, 8, False),
+        ("EQUITY",                               None,                                          C_GOLD,  13, True),
+        ("  Start of day",                       f"{day_start_eq:,.2f}",                        C_TEXT,  13, False),
+        ("  End of day",                         f"{day_end_eq:,.2f}",                          _pc(day_equity_delta), 13, False),
+        ("  Current (account)",                  f"{current_equity:,.2f}",                      _pc(current_equity - starting_equity), 13, False),
     ]
     if best_trade:
         rows += [
-            ("─" * 34,                            None,                                        C_BORDER, 7, False),
-            ("BEST TRADE (today)",                None,                                        C_GOLD,  10, True),
-            ("  P&L",                             f"+{best_trade['profit']:.4f}",              C_GREEN, 10, False),
-            ("  Signal",                          best_trade["trade_type"],                    C_MUTED,  9, False),
+            ("─" * 34,                            None,                                        C_BORDER, 8, False),
+            ("BEST TRADE (today)",                None,                                        C_GOLD,  13, True),
+            ("  P&L",                             f"+{best_trade['profit']:.4f}",              C_GREEN, 13, False),
+            ("  Signal",                          best_trade["trade_type"],                    C_MUTED, 11, False),
         ]
     if worst_trade and worst_trade is not best_trade:
         rows += [
-            ("WORST TRADE (today)",               None,                                        C_GOLD,  10, True),
-            ("  P&L",                             f"{worst_trade['profit']:.4f}",              C_RED,   10, False),
-            ("  Signal",                          worst_trade["trade_type"],                   C_MUTED,  9, False),
+            ("WORST TRADE (today)",               None,                                        C_GOLD,  13, True),
+            ("  P&L",                             f"{worst_trade['profit']:.4f}",              C_RED,   13, False),
+            ("  Signal",                          worst_trade["trade_type"],                   C_MUTED, 11, False),
         ]
 
     n = len(rows)
@@ -433,10 +441,10 @@ def build_daily_summary_image(
     ax_c.set_facecolor(C_PANEL)
     for sp in ax_c.spines.values():
         sp.set_edgecolor(C_BORDER); sp.set_linewidth(1.5)
-    ax_c.tick_params(colors=C_MUTED, labelsize=9)
+    ax_c.tick_params(colors=C_MUTED, labelsize=11)
     ax_c.grid(True, color=C_GRID, linestyle="--", linewidth=0.6, alpha=0.8)
     ax_c.set_title("Equity Curve", color=C_TEXT, pad=8,
-                   fontsize=11, fontweight="bold", fontfamily="monospace")
+                   fontsize=14, fontweight="bold", fontfamily="monospace")
     ax_c.yaxis.set_major_formatter(
         matplotlib.ticker.FuncFormatter(lambda x, _: f"{x:,.2f}")
     )
@@ -480,7 +488,7 @@ def build_daily_summary_image(
     else:
         ax_c.text(0.5, 0.5, "No trade data for this day",
                   transform=ax_c.transAxes, ha="center", va="center",
-                  color=C_MUTED, fontsize=13, fontfamily="monospace")
+                  color=C_MUTED, fontsize=16, fontfamily="monospace")
 
     legend_elems = [
         Line2D([0], [0], marker="^", color="w", markerfacecolor=C_GREEN,
@@ -494,7 +502,7 @@ def build_daily_summary_image(
     ]
     ax_c.legend(handles=legend_elems, loc="upper left",
                 facecolor=C_BG, edgecolor=C_BORDER,
-                labelcolor=C_MUTED, fontsize=9, framealpha=0.85)
+                labelcolor=C_MUTED, fontsize=11, framealpha=0.85)
 
     # ── Render ────────────────────────────────────────────────────────────────
     buf = io.BytesIO()
@@ -1170,6 +1178,31 @@ class BinanceUSExchange:
             return []
         return [float(k[4]) for k in klines]
 
+    def get_recent_klines_full(self, symbol: str, interval: str, limit: int) -> list:
+        """Fetch the most recent `limit` klines as candle dicts (full OHLC + timestamps)."""
+        klines = self._safe_request(
+            self.client.get_klines,
+            symbol=symbol,
+            interval=interval,
+            limit=limit
+        )
+        if not klines:
+            return []
+        return [
+            {
+                "symbol":    symbol,
+                "open_time": k[0],
+                "close_time": k[6],
+                "open":   float(k[1]),
+                "high":   float(k[2]),
+                "low":    float(k[3]),
+                "close":  float(k[4]),
+                "volume": float(k[5]),
+                "trades": int(k[8]),
+            }
+            for k in klines
+        ]
+
     def get_historical_klines_raw(self, symbol: str, interval: str, lookback: str) -> list:
         """Fetch full raw klines for a lookback window via _safe_request."""
         return self._safe_request(
@@ -1370,6 +1403,62 @@ class SimpleRSI:
             avg_gain = sum(gains[-period:]) / period
             avg_loss = sum(losses[-period:]) / period
 
+        # --- EMA-SMOOTHED RSI / WILDER'S RMA (TradingView / Binance) ---
+        elif mode in ("ema", "wilder"):
+            # "wilder" is the canonical label for this algorithm.
+            # "ema" is kept as an alias for backward compatibility.
+            #
+            # Algorithm: Wilder's Smoothed Moving Average (SMMA / RMA)
+            #   alpha = 1/period  (NOT the standard EMA alpha of 2/(period+1))
+            #   recursive: avg[i] = (avg[i-1] * (period-1) + value[i]) / period
+            #   seeded:    avg[period] = SMA(values[0..period-1])
+            #
+            # This is the exact algorithm used by TradingView's ta.rsi() and
+            # therefore by Binance's built-in RSI chart indicator.
+            # Requires the full price history to properly seed the EMA.
+            if len(prices) < period + 1:
+                return None
+
+            all_gains = []
+            all_losses = []
+            for i in range(1, len(prices)):
+                change = prices[i] - prices[i - 1]
+                all_gains.append(max(change, 0.0))
+                all_losses.append(max(-change, 0.0))
+
+            # SMA seed from the first `period` changes
+            avg_gain = sum(all_gains[:period]) / period
+            avg_loss = sum(all_losses[:period]) / period
+
+            # Wilder's RMA: run forward through the full price history
+            for i in range(period, len(all_gains)):
+                avg_gain = (avg_gain * (period - 1) + all_gains[i]) / period
+                avg_loss = (avg_loss * (period - 1) + all_losses[i]) / period
+
+        # --- TRADINGVIEW RSI (lukaszbinden/rsi_tradingview) ---
+        elif mode == "tv":
+            # Direct port of https://github.com/lukaszbinden/rsi_tradingview/blob/main/rsi.py
+            # Uses pandas ewm with alpha=1/period and adjust=True (weighted-sum form).
+            # This differs from the recursive Wilder RMA in how early bars are weighted
+            # but converges to the same values given sufficient history.
+            if len(prices) < period + 1:
+                return None
+
+            series = pd.Series(prices, dtype=float)
+            delta = series.diff()
+
+            up   = delta.clip(lower=0).ewm(alpha=1/period, adjust=True).mean()
+            down = (-delta).clip(lower=0).ewm(alpha=1/period, adjust=True).mean()
+
+            last_up   = up.iloc[-1]
+            last_down = down.iloc[-1]
+
+            if last_up == 0:
+                return 0.0
+            if last_down == 0:
+                return 100.0
+            return round(100 - (100 / (1 + last_up / last_down)), 2)
+
         else:
             raise ValueError(f"Unknown RSI mode: {mode}")
 
@@ -1404,7 +1493,8 @@ class StrategyBase:
             bband_mult = 2,
             timeout = 999999,
             logger=None,
-            fee_rate=0.001
+            fee_rate=0.001,
+            warmup_replay_count=5
             ):
         self.period = rsi_period
         self.mode=rsi_mode
@@ -1433,21 +1523,24 @@ class StrategyBase:
         self.bband_period = bband_period
         self.bband_multiplier = bband_mult
         self.timeout = timeout
-        self.warmup_bars = 100
+        self.warmup_bars = 500
+        self.warmup_replay_count = warmup_replay_count
         self.fee_rate = fee_rate
         self.logger = logger if logger is not None else OrderLogger()
-        self._load_initial_klines()
-        self.ema_score = None
-        self.buy_trigger = None
-        self.atr_series = []
+        # These must be ready before _load_initial_klines() because the
+        # warmup replay calls on_price(), which appends to them.
         self.candles = []
         self.k_values = []   # KDJ K line
         self.d_values = []   # KDJ D line
         self.j_values = []   # KDJ J line
+        self.last_eval_time = -99
+        self._load_initial_klines()
+        self.ema_score = None
+        self.buy_trigger = None
+        self.atr_series = []
         self.trend_filter = None
         self.prev_trend_filter = None
         self.secondary_strategy_state = "FLAT"
-        self.last_eval_time = -99
         self.mr_cooldown_until = -1
         self.pft_per_strat = defaultdict(lambda: defaultdict(float))
 
@@ -1455,18 +1548,44 @@ class StrategyBase:
         
     def _load_initial_klines(self):
         try:
-            closes = self.exchange.get_recent_prices(self.symbol, self.interval, self.warmup_bars)
-            if closes:
-                self.prices.extend(closes)
-    
-            # Optionally compute initial RSI
-            if len(self.prices) > self.period:
-                self.last_rsi = SimpleRSI.compute(self.prices, period=self.period)
-    
-            self.logger.log_event(
-                f"Loaded {len(self.prices)} warmup candles for {self.symbol}"
+            klines = self.exchange.get_recent_klines_full(
+                self.symbol, self.interval, self.warmup_bars
             )
-    
+            if not klines:
+                self.logger.log_event(f"Warmup load returned no candles for {self.symbol}")
+                return
+
+            # The REST API always appends the currently-open (unclosed) candle as
+            # the last element — drop it so we only work with closed candles.
+            klines = klines[:-1]
+
+            # Seed all but the last N candles without logging.
+            # on_price() will add the final N (printing close messages for each).
+            replay_count = min(self.warmup_replay_count, len(klines) - 1)
+            seed_klines   = klines[:-replay_count]
+            replay_klines = klines[len(seed_klines):]
+
+            for k in seed_klines:
+                self.prices.append(float(k["close"]))
+                self.highs.append(k["high"])
+                self.lows.append(k["low"])
+
+            self.logger.log_event(
+                f"Loaded {len(klines)} warmup candles for {self.symbol} — "
+                f"replaying last {len(replay_klines)} to console:"
+            )
+
+            # Replay through on_price so the close messages (RSI, BB, KDJ, …)
+            # are printed exactly as they would appear during live trading.
+            for k in replay_klines:
+                self.on_price(k)
+
+            # Reset any signal that fired during replay — the live loop has not
+            # started yet and we don't want a stale order queued up.
+            with self._order_lock:
+                self.order = None
+            self.last_order_type = "SELL"
+
         except Exception as e:
             self.logger.log_event(f"Warmup candle load failed: {e}")
     
@@ -1741,21 +1860,37 @@ class StrategyBase:
 
             last_price = self.prices[-1]
             
-            rsi = SimpleRSI.compute(self.prices, self.period, mode=self.mode)
+            # Always compute all four variants for display; active mode drives signals.
+            rsi_simple = SimpleRSI.compute(self.prices, self.period, mode="simple")
+            rsi_ema    = SimpleRSI.compute(self.prices, self.period, mode="ema")
+            rsi_wilder = SimpleRSI.compute(self.prices, self.period, mode="wilder")
+            rsi_tv     = SimpleRSI.compute(self.prices, self.period, mode="tv")
+            if self.mode == "simple":
+                rsi = rsi_simple
+            elif self.mode in ("ema", "wilder"):
+                rsi = rsi_ema   # ema and wilder share the same computation
+            elif self.mode == "tv":
+                rsi = rsi_tv
+            else:
+                rsi = SimpleRSI.compute(self.prices, self.period, mode=self.mode)
             self.last_rsi = rsi
             self.rsi.append(rsi)
-            
+
             if last_price is None:
                 return None
-            
+
             lower, mid, upper = self._bands()
             if lower is None:
                 return (None, False)
-            
+
             local_readable_timestamp = datetime.fromtimestamp(int(candle['close_time']/1000))
             local_date = local_readable_timestamp.strftime("%Y-%m-%d")
             local_time = local_readable_timestamp.strftime("%H:%M %Z")
-            msg = f"[CLOSE: {local_date}, {local_time}] {self.symbol} Price: {last_price:.2f} | RSI: {self.last_rsi:>6.2f} | BB_L: {lower:>10.3f} | BB_M: {mid:>10.3f} | BB_U: {upper:>10.3f} | "
+            _rsi_s  = f"{rsi_simple:>6.2f}" if rsi_simple is not None else "   N/A"
+            _rsi_e  = f"{rsi_ema:>6.2f}"    if rsi_ema    is not None else "   N/A"
+            _rsi_w  = f"{rsi_wilder:>6.2f}" if rsi_wilder is not None else "   N/A"
+            _rsi_tv = f"{rsi_tv:>6.2f}"     if rsi_tv     is not None else "   N/A"
+            msg = f"[CLOSE: {local_date}, {local_time}] {self.symbol} Price: {last_price:.2f} | RSI(s): {_rsi_s} | RSI(e): {_rsi_e} | RSI(w): {_rsi_w} | RSI(tv): {_rsi_tv} | BB_L: {lower:>10.3f} | BB_M: {mid:>10.3f} | BB_U: {upper:>10.3f} | "
             if len(self.prices) > 55:
                 msg += f" K: {self.k_values[-1]:>5.2f} |"
                 msg += f" D: {self.d_values[-1]:>5.2f} |"
@@ -1984,7 +2119,7 @@ class _LiveTradingMixin:
             self.logger.log_event(f"Generating daily summary image for {yesterday}...")
             img_bytes = build_daily_summary_image(
                 self.logger.log_dir,
-                self.config_data.starting_cash,
+                self.config_data.starting_cash_live,
                 self.exchange.symbol,
                 yesterday,
             )
@@ -2279,6 +2414,10 @@ class _LiveTradingMixin:
                     order = None
                     with self.strat._order_lock:
                         self.strat.order = None
+                    # on_price() already flipped last_order_type to "SELL" before
+                    # this guard ran — restore it so the cadence does not change
+                    # unless an actual sell executes.
+                    self.strat.last_order_type = "BUY"
                     continue
 
                 acc_info = self.exchange.get_account_snapshot()
@@ -2979,7 +3118,7 @@ class TradingApp(tk.Tk, _LiveTradingMixin):
         self.bt_rsi_mode_live = tk.StringVar(value=self.config_data.rsi_mode)
         ttk.Label(frm_rsi, text="Mode:").grid(row=3, column=0, sticky="w")
         ttk.Combobox(frm_rsi, textvariable=self.bt_rsi_mode_live,
-                     values=["simple", "sma"], width=10).grid(row=3, column=1)
+                     values=["simple", "sma", "ema", "wilder", "tv"], width=10).grid(row=3, column=1)
         ttk.Label(frm_rsi, text="Period:").grid(row=0, column=0, sticky="w")
         ttk.Entry(frm_rsi, textvariable=self.bt_rsi_period_live, width=8).grid(row=0, column=1)
         ttk.Label(frm_rsi, text="Oversold:").grid(row=1, column=0, sticky="w")
@@ -3073,7 +3212,7 @@ class TradingApp(tk.Tk, _LiveTradingMixin):
         self.bt_rsi_mode = tk.StringVar(value=self.config_data.rsi_mode)
         ttk.Label(frm_controls, text="Mode:").grid(row=3, column=2, sticky="w")
         ttk.Combobox(frm_controls, textvariable=self.bt_rsi_mode,
-                     values=["simple", "sma"], width=10).grid(row=3, column=3)
+                     values=["simple", "sma", "ema", "wilder", "tv"], width=10).grid(row=3, column=3)
         
         # File selection
         self.bt_file_path = tk.StringVar(value="")
@@ -3280,6 +3419,7 @@ class TradingApp(tk.Tk, _LiveTradingMixin):
             trade_size_base=0.01,
             logger=self.logger,
             fee_rate=self.config_data.fee_rate,
+            warmup_replay_count=self.config_data.warmup_replay_count,
         )
         # self.strat = EMA21PullbackReclaim15m(
         #     exchange=self.exchange,
@@ -3518,9 +3658,9 @@ class TradingApp(tk.Tk, _LiveTradingMixin):
         self.logger.log_event("Websocket watchdog started - checking for kline timeout")
         interval_str = self.bt_interval_live.get()
         interval_secs = self._parse_interval_to_seconds(interval_str)
-        # Allow 2x the candle interval before treating silence as a dead stream.
+        # Allow 1.2x the candle interval before treating silence as a dead stream.
         # Floor at 120s so short intervals (e.g. 1m) don't trigger on normal variance.
-        timeout = max(120, interval_secs * 2)
+        timeout = max(120, interval_secs * 1.2)
         self.logger.log_event(
             f"Watchdog timeout set to {timeout:.0f}s for {interval_str} candles"
         )
@@ -3571,6 +3711,7 @@ class TradingApp(tk.Tk, _LiveTradingMixin):
             interval=self.bt_interval_live.get(),
             logger=self.logger,
             fee_rate=self.config_data.fee_rate,
+            warmup_replay_count=self.config_data.warmup_replay_count,
         )
         self.candle_bus.subscribe(self.strat.on_price)
         self.logger.log_event(f"Live trading started for {symbol} with period {self.strat.period}")
@@ -3716,6 +3857,9 @@ class HeadlessRunner(_LiveTradingMixin):
         self.cum_profit = 0.0
         self.num_trades = 0
         self._reconnect_lock = threading.Lock()
+        self._reconnect_delay     = 5    # current backoff delay (seconds)
+        self._reconnect_delay_base = 5   # reset-to value after a successful reconnect
+        self._reconnect_delay_max  = 120 # cap
 
         self.logger.log_event("Initializing exchange...")
         self.exchange = BinanceUSExchange(
@@ -3811,7 +3955,7 @@ class HeadlessRunner(_LiveTradingMixin):
         self.candle_bus.publish(candle)
 
     def _restart_ws_stream(self):
-        """Stop and restart the stream without touching live_running or self.strat."""
+        """Stop and restart the stream with exponential backoff on repeated failures."""
         if not self.live_running:
             return
         with self._reconnect_lock:   # serialise concurrent restart attempts
@@ -3821,12 +3965,23 @@ class HeadlessRunner(_LiveTradingMixin):
             interval = self.config_data.live_interval
             self.logger.log_event("WebSocket reconnect: tearing down old stream...")
             self._stop_price_stream()
-            time.sleep(5)
+            delay = self._reconnect_delay
+            self.logger.log_event(f"WebSocket reconnect: waiting {delay:.0f}s before retry...")
+            time.sleep(delay)
             if not self.live_running:
                 return
             self.logger.log_event(f"WebSocket reconnect: starting new stream {symbol}@{interval}")
             self.last_kline_time = time.time()
             self._start_kline_stream(symbol, interval)
+            if self.twm is not None:
+                # Success — reset backoff
+                self._reconnect_delay = self._reconnect_delay_base
+            else:
+                # Failure — double the delay up to the cap
+                self._reconnect_delay = min(self._reconnect_delay * 2, self._reconnect_delay_max)
+                self.logger.log_event(
+                    f"WebSocket reconnect: stream failed — next retry in {self._reconnect_delay:.0f}s"
+                )
 
     def _ws_watchdog(self, symbol: str, interval: str):
         interval_secs = self._parse_interval_to_seconds(interval)
@@ -3841,6 +3996,22 @@ class HeadlessRunner(_LiveTradingMixin):
                 self.last_kline_time = time.time()
                 self._restart_ws_stream()
                 time.sleep(timeout / 2)
+
+    # ------------------------------------------------------------------
+    # Graceful shutdown helpers
+    # ------------------------------------------------------------------
+
+    def _stdin_stop_listener(self):
+        """Background thread: type 'q' + Enter to stop live trading gracefully."""
+        try:
+            while self.live_running:
+                line = sys.stdin.readline()
+                if line.strip().lower() in ("q", "quit", "stop", "exit"):
+                    self.logger.log_event("Stop command received — stopping live trading.")
+                    self.live_running = False
+                    break
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Live trading
@@ -3866,6 +4037,20 @@ class HeadlessRunner(_LiveTradingMixin):
         self.last_kline_time = time.time()
         self.exchange.order_manager.interval = interval
 
+        # Register SIGTERM so process managers (systemd, task schedulers, etc.)
+        # trigger the same clean shutdown path as Ctrl+C.
+        def _sigterm_handler(signum, frame):
+            self.logger.log_event("SIGTERM received — stopping live trading.")
+            self.live_running = False
+        try:
+            signal.signal(signal.SIGTERM, _sigterm_handler)
+        except (OSError, ValueError):
+            pass  # not on main thread or OS doesn't support it
+
+        # Allow typing 'q' + Enter in the console as an alternative to Ctrl+C.
+        threading.Thread(target=self._stdin_stop_listener, daemon=True).start()
+        self.logger.log_event("Type 'q' + Enter to stop gracefully.")
+
         self._start_kline_stream(symbol, interval)
 
         self.strat = BTRSIStrategy(
@@ -3878,6 +4063,7 @@ class HeadlessRunner(_LiveTradingMixin):
             interval=interval,
             logger=self.logger,
             fee_rate=self.config_data.fee_rate,
+            warmup_replay_count=self.config_data.warmup_replay_count,
         )
         self.candle_bus.subscribe(self.strat.on_price)
 
@@ -3976,6 +4162,7 @@ class HeadlessRunner(_LiveTradingMixin):
             trade_size_base=0.01,
             logger=self.logger,
             fee_rate=self.config_data.fee_rate,
+            warmup_replay_count=self.config_data.warmup_replay_count,
         )
 
         cash           = float(self.config_data.starting_cash)
@@ -4161,6 +4348,8 @@ def parse_cli_args():
                         help='Backtest lookback window, e.g. "6 months ago UTC"')
     parser.add_argument("--starting-cash", type=float, default=None,
                         help="Starting cash for backtest simulation")
+    parser.add_argument("--starting-cash-live", type=float, default=None,
+                        help="Starting cash for live session equity tracking")
 
     return parser.parse_args()
 
@@ -4193,6 +4382,8 @@ def _apply_cli_overrides(config: AppConfig, args) -> None:
         config.backtest_lookback = args.lookback
     if args.starting_cash is not None:
         config.starting_cash = args.starting_cash
+    if args.starting_cash_live is not None:
+        config.starting_cash_live = args.starting_cash_live
 
 if __name__ == "__main__":
     args   = parse_cli_args()
