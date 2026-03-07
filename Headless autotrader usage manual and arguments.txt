@@ -1,3 +1,12 @@
+You now have three clean shutdown paths, all of which flow through the same finally block (live_running = False → _stop_price_stream() → log):
+
+Method	When to use
+Ctrl+C	Already worked; now explicitly announced at startup too
+Type q + Enter	New — useful when you don't want to interrupt the terminal
+SIGTERM	New — for taskkill, kill, systemd, or any process manager
+
+----
+
 config.json -
 
 

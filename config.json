@@ -4,6 +4,7 @@
   "base_asset": "BNB",
   "quote_asset": "USD",
   "starting_cash": 100000.0,
+  "starting_cash_live": 1150.0,
   "fee_rate": 0.001,
   "telegram_bot_token": "",
   "telegram_chat_id": "",
@@ -11,8 +12,8 @@
   "send_real_orders": false,
   "live_symbol": "BNBUSD",
   "live_interval": "1h",
-  "rsi_period": 2,
-  "rsi_mode": "simple",
+  "rsi_period": 4,
+  "rsi_mode": "tv",
   "rsi_oversold": 31.0,
   "rsi_overbought": 70.0,
   "backtest_symbol": "BNBUSD",
@@ -23,6 +24,7 @@
   "trail_limit_offset_pct": 0.1,
   "trail_limit_timeout_s": 60,
   "trail_limit_widen_pct": 0.05,
-  "trail_limit_max_retries": 1,
-  "buy_price": 657.7400949888354
+  "trail_limit_max_retries": 2,
+  "buy_price": 640.0600947012956,
+  "warmup_replay_count": 45
 }
